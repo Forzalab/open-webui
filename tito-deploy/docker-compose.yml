@@ -1,0 +1,71 @@
+services:
+  owui:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: tito-owui:local
+    restart: unless-stopped
+    mem_limit: 2500m
+    expose:
+      - "8080"
+    # TODO(B4): re-add depends_on calendar-mcp service_healthy once Apps Script is deployed.
+    volumes:
+      - owui-data:/app/backend/data
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      WEBUI_URL: https://${TITO_DOMAIN}
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY}
+      ENABLE_OAUTH_SIGNUP: "true"
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      ENABLE_LOGIN_FORM: "false"
+      ENABLE_SIGNUP: "false"
+      DEFAULT_LOCALE: vi-VN
+      ENABLE_VERSION_UPDATE_CHECK: "false"
+      RAG_SYSTEM_CONTEXT: "false"
+      ENABLE_TAGS_GENERATION: "false"
+      ENABLE_FOLLOW_UP_GENERATION: "false"
+      ENABLE_AUTOCOMPLETE_GENERATION: "false"
+      ENABLE_SEARCH_QUERY_GENERATION: "false"
+      ENABLE_RETRIEVAL_QUERY_GENERATION: "false"
+      TITO_DISCORD_WEBHOOK: ${TITO_DISCORD_WEBHOOK}
+      TITO_TOOLS_FILE: /app/backend/data/tito-tools.json
+      TITO_SOFT_CAP_USD: "15"
+      TITO_HARD_CAP_USD: "22"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+
+  calendar-mcp:
+    # TODO verify image tag + flags at deploy (image flavor, --allowed-host values,
+    # healthcheck endpoint, and whether owui reaches this service by name/port).
+    image: ghcr.io/sparfenyuk/mcp-proxy:${MCP_PROXY_TAG:-v0.12.0-debian-node}
+    restart: unless-stopped
+    expose:
+      - "8096"
+    environment:
+      APPS_SCRIPT_URL: ${APPS_SCRIPT_URL}
+      APPS_SCRIPT_TOKEN: ${APPS_SCRIPT_TOKEN}
+    command: ["sh", "-c", "exec mcp-proxy --host=0.0.0.0 --port=8096 --allowed-host calendar-mcp --allowed-host calendar-mcp:8096 --pass-environment -- ${CALENDAR_MCP_CMD}"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8096/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  caddy:
+    image: caddy:2.8
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      TITO_DOMAIN: ${TITO_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  owui-data:
+  caddy-data:
+  caddy-config:

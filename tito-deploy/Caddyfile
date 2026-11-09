@@ -1,0 +1,4 @@
+# Reverse proxy to owui. Caddy forwards websocket upgrades automatically.
+{$TITO_DOMAIN} {
+	reverse_proxy owui:8080
+}
