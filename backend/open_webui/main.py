@@ -531,6 +531,72 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             log.warning(f'License data retrieval failed during startup: {e}')
 
+    # B5: Tito self-check — the frozen tool list must be attainable for a NON-admin user.
+    tito_selfcheck_user = os.getenv('TITO_SELFCHECK_USER_ID', '')
+    if not tito_selfcheck_user:
+        log.warning('TITO_SELFCHECK_USER_ID unset; skipping Tito self-check')
+    else:
+        tito_model = app.state.MODELS.get(tito.TITO_MODEL_ID)
+        tito_user = await Users.get_user_by_id(tito_selfcheck_user)
+        if not tito_model or not tito_user or tito_user.role == 'admin':
+            log.error('Tito self-check failed: model or non-admin user unavailable')
+            await _tito_notify('Tito self-check failed: model or non-admin user unavailable', {})
+        else:
+            failures = tito.tito_model_checks(tito_model)
+            if not await Config.get('memories.enable'):
+                failures.append('memories.enable disabled')
+            failures.extend(
+                tito.tito_config_checks(
+                    {
+                        'ENABLE_PERSISTENT_CONFIG': ENABLE_PERSISTENT_CONFIG,
+                        'RAG_SYSTEM_CONTEXT': RAG_SYSTEM_CONTEXT,
+                        'memories.system_context.enable': await Config.get('memories.system_context.enable', False),
+                    }
+                )
+            )
+            tools = {}
+            try:
+                tools = await get_builtin_tools(
+                    request,
+                    {
+                        '__user__': tito_user.model_dump(),
+                        '__metadata__': {
+                            'files': [{'type': 'file', 'id': 'tito-selfcheck-file'}],
+                            'params': {'function_calling': 'native'},
+                            'session_id': 'tito-selfcheck',
+                        },
+                    },
+                    features=tito.tito_features(),
+                    model=tito_model,
+                    is_note_chat=False,
+                )
+            except Exception:
+                log.exception('Tito self-check get_builtin_tools failed')
+                failures.append('get_builtin_tools raised')
+            failures.extend(tito.tito_missing_tools(set(tools)))
+
+            if failures:
+                log.error('Tito self-check failed: %s', failures)
+                await _tito_notify(f'Tito self-check failed: {failures}', {})
+            else:
+                tools_file = os.getenv('TITO_TOOLS_FILE', '')
+                if tools_file:
+                    try:
+                        payload = [
+                            {
+                                'name': name,
+                                'description': (tool.get('spec') or {}).get('description', ''),
+                                'input_schema': (tool.get('spec') or {}).get('parameters', {}),
+                            }
+                            for name, tool in tools.items()
+                        ]
+                        with open(tools_file, 'w') as fh:
+                            fh.write(JSONCodec.dumps(payload))
+                    except Exception:
+                        log.exception('Tito self-check tool dump failed')
+                        await _tito_notify('Tito self-check failed: tool dump error', {})
+                log.info('Tito self-check passed (Tito up)')
+
     app.state.startup_complete = True
     await publish_event(request, EVENTS.SYSTEM_STARTUP_COMPLETED, source='system')
 

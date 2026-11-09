@@ -1170,7 +1170,13 @@ class ChatTable:
             existing_meta = existing_meta if isinstance(existing_meta, dict) else {}
             incoming_meta = message.get('meta')
             if isinstance(incoming_meta, dict):
-                if set(incoming_meta) <= {'voice', 'task_id', 'response_started_at', 'response_ended_at', 'tito_status'}:
+                if set(incoming_meta) <= {
+                    'voice',
+                    'task_id',
+                    'response_started_at',
+                    'response_ended_at',
+                    'tito_status',
+                }:
                     message = {**message, 'meta': {**existing_meta, **incoming_meta}}
                 else:
                     message = {
@@ -1178,7 +1184,13 @@ class ChatTable:
                         'meta': {
                             **{
                                 key: existing_meta[key]
-                                for key in ('voice', 'task_id', 'response_started_at', 'response_ended_at', 'tito_status')
+                                for key in (
+                                    'voice',
+                                    'task_id',
+                                    'response_started_at',
+                                    'response_ended_at',
+                                    'tito_status',
+                                )
                                 if key in existing_meta
                             },
                             **incoming_meta,

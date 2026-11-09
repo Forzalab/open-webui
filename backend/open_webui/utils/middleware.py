@@ -2082,10 +2082,14 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     chat = await Chats.get_chat_by_id(chat_id) if is_saved_chat_id(chat_id) else None
     is_tito = tito.is_tito_model(model)
     is_note_chat = bool(chat and (chat.meta or {}).get('internal') is True and (chat.meta or {}).get('type') == 'note')
-    use_builtin_tools = is_note_chat or is_tito or (
-        bool(metadata.get('session_id'))
-        and metadata.get('params', {}).get('function_calling') != 'legacy'
-        and (model.get('info', {}).get('meta', {}).get('capabilities') or {}).get('builtin_tools', True)
+    use_builtin_tools = (
+        is_note_chat
+        or is_tito
+        or (
+            bool(metadata.get('session_id'))
+            and metadata.get('params', {}).get('function_calling') != 'legacy'
+            and (model.get('info', {}).get('meta', {}).get('capabilities') or {}).get('builtin_tools', True)
+        )
     )
     metadata['include_file_context'] = bool(
         chat and chat.user_id == user.id and payload_tools is None and use_builtin_tools
@@ -3053,7 +3057,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             tito_system = chat_meta['tito_system']
 
         metadata['tito_system'] = tito_system
-        frozen = f"{tito_system['block1']}\n\n{tito_system['block2']}"
+        frozen = f'{tito_system["block1"]}\n\n{tito_system["block2"]}'
         form_data['messages'] = tito.apply_frozen_system(form_data['messages'], frozen)
 
         status_text = tito.build_tito_status(metadata.get('variables', {}))

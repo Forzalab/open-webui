@@ -43,11 +43,7 @@ def tito_stream_options() -> dict:
 
 
 def build_memory_snapshot(memories: list) -> str:
-    rows = [
-        memory
-        for memory in (memories or [])
-        if (getattr(memory, 'content', None) or '').strip()
-    ]
+    rows = [memory for memory in (memories or []) if (getattr(memory, 'content', None) or '').strip()]
     if not rows:
         return NO_MEMORIES_SENTINEL
 
@@ -109,9 +105,7 @@ def get_frozen_tito_blocks(meta: dict) -> tuple[str, str] | None:
 
 def apply_frozen_system(messages: list[dict], frozen_system: str) -> list[dict]:
     kept = [
-        message
-        for message in messages
-        if not (message.get('role') == 'system' and not message.get('mid_conversation'))
+        message for message in messages if not (message.get('role') == 'system' and not message.get('mid_conversation'))
     ]
     return [{'role': 'system', 'content': frozen_system}, *kept]
 
@@ -120,11 +114,11 @@ def build_tito_status(variables: dict, budget_counters=None) -> str:
     variables = variables or {}
     lines = ['<context>']
     if variables.get('CURRENT_DATETIME'):
-        lines.append(f"time: {variables['CURRENT_DATETIME']}")
+        lines.append(f'time: {variables["CURRENT_DATETIME"]}')
     if variables.get('CURRENT_TIMEZONE'):
-        lines.append(f"timezone: {variables['CURRENT_TIMEZONE']}")
+        lines.append(f'timezone: {variables["CURRENT_TIMEZONE"]}')
     if variables.get('USER_LOCATION'):
-        lines.append(f"location: {variables['USER_LOCATION']}")
+        lines.append(f'location: {variables["USER_LOCATION"]}')
     lines.append('</context>')
     return '\n'.join(lines)
 
@@ -192,8 +186,8 @@ def tito_missing_tools(present_names) -> list[str]:
 
 def tito_model_checks(model: dict) -> list[str]:
     model = model or {}
-    capabilities = (model.get('info', {}).get('meta', {}).get('capabilities') or {})
-    builtin_tools = (model.get('info', {}).get('meta', {}).get('builtinTools') or {})
+    capabilities = model.get('info', {}).get('meta', {}).get('capabilities') or {}
+    builtin_tools = model.get('info', {}).get('meta', {}).get('builtinTools') or {}
     fails = []
     if capabilities.get('memory') is False:
         fails.append('capabilities.memory disabled')
