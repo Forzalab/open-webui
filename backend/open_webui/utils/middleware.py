@@ -198,7 +198,7 @@ async def _tito_notify(message: str, event_data: dict | None = None) -> None:
         return
     try:
         await post_webhook('open-webui', url, message, event_data or {})
-    except Exception:
+    except Exception as e:
         # Never log the exception text/traceback: it can embed the webhook URL.
         log.debug('Tito Discord notification failed (%s)', type(e).__name__)
 
