@@ -269,6 +269,8 @@ from open_webui.utils.models import (
     get_filtered_models,
 )
 from open_webui.utils.payload import apply_model_controls
+from open_webui.utils import tito
+from open_webui.utils.webhook import post_webhook
 from open_webui.utils.oauth import (
     OAuthClientInformationFull,
     OAuthClientManager,
@@ -290,7 +292,7 @@ from open_webui.utils.tool_approval import (
     build_tool_approval_resume_payload,
     resolve_tool_call_output,
 )
-from open_webui.utils.tools import set_terminal_servers, set_tool_servers
+from open_webui.utils.tools import get_builtin_tools, set_terminal_servers, set_tool_servers
 
 if SAFE_MODE:
     print('SAFE MODE ENABLED')

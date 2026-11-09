@@ -50,6 +50,7 @@ from open_webui.models.access_grants import AccessGrants
 from open_webui.models.chats import Chats
 from open_webui.models.config import Config
 from open_webui.models.folders import Folders
+from open_webui.models.memories import Memories
 from open_webui.models.models import Models
 from open_webui.models.users import UserModel, Users
 from open_webui.retrieval.utils import filter_source_metadata, get_sources_from_items
@@ -81,6 +82,8 @@ from open_webui.socket.main import (
 )
 from open_webui.tasks import append_response_stream, clear_response_stream, save_response_stream
 from open_webui.utils.access_control import has_permission
+from open_webui.utils import tito
+from open_webui.utils.webhook import post_webhook
 from open_webui.utils.access_control.files import get_owner_accessible_folder_files
 from open_webui.utils.access_control.folders import has_folder_access
 from open_webui.utils.ask_user import stage_ask_user_tool_calls
@@ -186,6 +189,17 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
+
+
+async def _tito_notify(message: str, event_data: dict | None = None) -> None:
+    """Best-effort Discord alert for Tito failures (env-gated, never raises)."""
+    url = os.getenv('TITO_DISCORD_WEBHOOK', '')
+    if not url:
+        return
+    try:
+        await post_webhook('open-webui', url, message, event_data or {})
+    except Exception:
+        log.debug('Tito Discord notification failed', exc_info=True)
 
 
 def _is_tool_result_error(value: Any) -> bool:
@@ -2066,8 +2080,9 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     user_message_id = metadata.get('user_message_id')
     pending_assistant_message = None
     chat = await Chats.get_chat_by_id(chat_id) if is_saved_chat_id(chat_id) else None
+    is_tito = tito.is_tito_model(model)
     is_note_chat = bool(chat and (chat.meta or {}).get('internal') is True and (chat.meta or {}).get('type') == 'note')
-    use_builtin_tools = is_note_chat or (
+    use_builtin_tools = is_note_chat or is_tito or (
         bool(metadata.get('session_id'))
         and metadata.get('params', {}).get('function_calling') != 'legacy'
         and (model.get('info', {}).get('meta', {}).get('capabilities') or {}).get('builtin_tools', True)
@@ -2112,6 +2127,9 @@ async def process_chat_payload(request, form_data, user, metadata, model):
 
             system_message = get_system_message(form_data.get('messages', []))
             form_data['messages'] = [system_message, *db_messages] if system_message else db_messages
+
+            if is_tito:
+                form_data['messages'] = tito.expand_tito_status(form_data['messages'])
 
             # Inject image files into content as image_url parts (mirrors frontend logic)
             for message in form_data['messages']:
@@ -3003,6 +3021,48 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             convert_output_to_messages(initial_output, raw=True, reasoning_format=get_reasoning_format(model))
         )
         metadata['initial_output'] = initial_output
+
+    if is_tito:
+        chat_id = metadata.get('chat_id')
+        chat_error = tito.tito_chat_error(chat, chat_id, is_new_chat=False)
+        if chat_error:
+            log.error('Tito chat guard failed: %s (chat_id=%s)', chat_error, chat_id)
+            await _tito_notify(f'Tito chat guard: {chat_error}', {'chat_id': chat_id})
+            raise HTTPException(
+                status_code=403 if chat_error == tito.TITO_TEMP_CHAT_ERROR else 404,
+                detail=chat_error,
+            )
+
+        chat_meta = (chat.meta if chat else None) or {}
+        frozen_blocks = tito.get_frozen_tito_blocks(chat_meta)
+        if frozen_blocks is None:
+            raw_system = metadata.get('tito_raw_system')
+            try:
+                memories = await Memories.get_memories_by_user_id(user.id)
+                if memories is None:
+                    raise Exception('Memories.get_memories_by_user_id returned None')
+                block1, block2 = tito.build_tito_blocks(raw_system, memories)
+            except Exception:
+                log.exception('Tito memory snapshot failed; using unavailable sentinel')
+                block1, block2 = tito.build_tito_blocks_unavailable(raw_system)
+                await _tito_notify('Tito memory snapshot failed', {'chat_id': chat_id})
+            tito_system = tito.freeze_tito_system({}, block1, block2)['tito_system']
+            if is_saved_chat_id(chat_id):
+                await Chats.update_chat_meta_by_id(chat_id, {'tito_system': tito_system})
+        else:
+            tito_system = chat_meta['tito_system']
+
+        metadata['tito_system'] = tito_system
+        frozen = f"{tito_system['block1']}\n\n{tito_system['block2']}"
+        form_data['messages'] = tito.apply_frozen_system(form_data['messages'], frozen)
+
+        status_text = tito.build_tito_status(metadata.get('variables', {}))
+        messages = form_data['messages']
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get('role') == 'user':
+                messages[i] = tito.store_tito_status(messages[i], status_text)
+                messages.insert(i + 1, tito.build_tito_status_message(status_text))
+                break
 
     form_data = normalize_messages_for_model(form_data)
 
