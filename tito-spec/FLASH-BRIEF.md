@@ -1,6 +1,6 @@
 # FLASH-BRIEF — Tito OWUI patches A / C / G / B5 (rev 2)
 
-For the coder. Read `SPEC.md` for the full contract; `KEY.md` for answers. Do NOT touch the
+For the coder. Read `SPEC.md` for the full contract. Do NOT touch the
 pipe. All changes gated on `model.get('id') == 'tito'` (process_chat_payload) or
 `model_id == 'tito'` (main.py).
 
