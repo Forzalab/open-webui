@@ -1,9 +1,6 @@
 services:
   owui:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-    image: tito-owui:local
+    image: ghcr.io/forzalab/open-webui:${TITO_IMAGE_TAG:-tito}
     restart: unless-stopped
     mem_limit: 2500m
     expose:

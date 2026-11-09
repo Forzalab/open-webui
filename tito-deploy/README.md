@@ -15,3 +15,5 @@ Logs:
       --env-file /opt/tito/.env logs -f
 
 Update = rerun the one-liner (fetches the pinned ref and rebuilds).
+
+The image is built by GitHub Actions; the ghcr package must be PUBLIC (or `docker login` on the box).

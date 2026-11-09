@@ -84,5 +84,6 @@ if [ -n "$missing" ]; then
   exit 0
 fi
 
-# 8. Build + start (or update).
-docker compose -f "$REPO/tito-deploy/docker-compose.yml" --env-file "$ENV_FILE" up -d --build
+# 8. Pull the image (built by GitHub Actions), then start/update.
+docker compose -f "$REPO/tito-deploy/docker-compose.yml" --env-file "$ENV_FILE" pull owui
+docker compose -f "$REPO/tito-deploy/docker-compose.yml" --env-file "$ENV_FILE" up -d
