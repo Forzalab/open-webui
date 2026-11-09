@@ -19,6 +19,7 @@ services:
       ENABLE_SIGNUP: "false"
       DEFAULT_LOCALE: vi-VN
       ENABLE_VERSION_UPDATE_CHECK: "false"
+      ENABLE_PERSISTENT_CONFIG: "false"
       RAG_SYSTEM_CONTEXT: "false"
       ENABLE_TAGS_GENERATION: "false"
       ENABLE_FOLLOW_UP_GENERATION: "false"
