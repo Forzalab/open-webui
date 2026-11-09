@@ -6,6 +6,10 @@ on:
     branches:
       - tito
 
+concurrency:
+  group: tito-image
+  cancel-in-progress: true
+
 env:
   REGISTRY: ghcr.io
 
