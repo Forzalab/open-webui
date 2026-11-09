@@ -79,17 +79,21 @@ def freeze_tito_system(meta: dict, block1: str, block2: str) -> dict:
     meta['tito_system'] = {
         'block1': block1,
         'block2': block2,
-        'sha256': sha256_hex(f'{block1}\n\n{block2}'),
+        'sha256': sha256_hex(join_tito_system(block1, block2)),
     }
     return meta
+
+
+def join_tito_system(block1: str, block2: str) -> str:
+    """Single frozen system string; the pipe splits it on the first ``\\n\\n`` + SNAPSHOT_HEADING."""
+    return f'{block1}\n\n{block2}'
 
 
 def get_frozen_tito_system(meta: dict) -> str | None:
     blocks = get_frozen_tito_blocks(meta)
     if blocks is None:
         return None
-    block1, block2 = blocks
-    return f'{block1}\n\n{block2}'
+    return join_tito_system(*blocks)
 
 
 def get_frozen_tito_blocks(meta: dict) -> tuple[str, str] | None:

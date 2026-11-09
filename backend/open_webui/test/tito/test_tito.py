@@ -327,3 +327,79 @@ def test_tito_config_checks_flags_truthy():
     fails = tito.tito_config_checks(config)
     assert len(fails) == 1
     assert 'ENABLE_PERSISTENT_CONFIG' in fails[0]
+
+
+def test_blocks_coerce_none_raw_system_to_empty():
+    # N1: no literal "None" text; freeze still round-trips.
+    from open_webui.utils import tito
+
+    b1, b2 = tito.build_tito_blocks(None, [])
+    assert b1 == '' and 'None' not in b1
+    u1, _ = tito.build_tito_blocks_unavailable(None)
+    assert u1 == ''
+    meta = tito.freeze_tito_system({}, b1, b2)
+    assert tito.get_frozen_tito_blocks(meta) == ('', b2)
+    assert tito.get_frozen_tito_system(meta) == '\n\n' + b2
+
+
+def test_frozen_system_join_is_splittable_on_snapshot_heading():
+    # N2: pipe splits on first "\n\n" + SNAPSHOT_HEADING.
+    from open_webui.utils import tito
+
+    b1, b2 = tito.build_tito_blocks('PROMPT\n\nwith paras', [])
+    joined = tito.join_tito_system(b1, b2)
+    assert joined == b1 + '\n\n' + tito.SNAPSHOT_HEADING + b2[len(tito.SNAPSHOT_HEADING) :]
+    head, sep, tail = joined.partition('\n\n' + tito.SNAPSHOT_HEADING)
+    assert head == b1 and sep and (tito.SNAPSHOT_HEADING + tail) == b2
+    meta = tito.freeze_tito_system({}, b1, b2)
+    assert tito.get_frozen_tito_system(meta) == joined
+
+
+def test_ensure_status_new_user_message_persists_once():
+    # B1: new status stored on message, one status msg inserted, returned for persistence.
+    from open_webui.utils import tito
+
+    msgs = [{'role': 'system', 'content': 's'}, {'role': 'user', 'content': 'hi'}]
+    out, persist = tito.ensure_tito_status(msgs, 'ST')
+    assert persist == 'ST'
+    assert out[1]['meta']['tito_status'] == 'ST'
+    assert out[2] == {'role': 'system', 'content': 'ST', 'mid_conversation': True}
+    assert len(out) == 3
+
+
+def test_ensure_status_replays_stored_without_overwrite_or_duplicate():
+    # B1: regenerate/continue/tool-resume: stored status replayed, not rebuilt/persisted.
+    from open_webui.utils import tito
+
+    user = {'role': 'user', 'content': 'hi', 'meta': {'tito_status': 'OLD'}}
+    out, persist = tito.ensure_tito_status([user], 'NEW')
+    assert persist is None
+    assert out[0]['meta']['tito_status'] == 'OLD'
+    assert [m['content'] for m in out if m['role'] == 'system'] == ['OLD']
+    # already expanded by expand_tito_status -> no second status message
+    expanded = tito.expand_tito_status([user])
+    out2, persist2 = tito.ensure_tito_status(expanded, 'NEW')
+    assert persist2 is None and out2 == expanded
+
+
+def test_tito_notify_logs_no_webhook_url(monkeypatch, caplog):
+    # N3: failure log must not contain the webhook URL.
+    import asyncio
+    import logging
+
+    pytest = __import__('pytest')
+    try:
+        from open_webui.utils import middleware
+    except Exception as e:  # heavy import; skip if env lacks deps
+        pytest.skip(f'middleware not importable: {e}')
+
+    secret = 'https://discord.com/api/webhooks/123/SECRETTOKEN'
+    monkeypatch.setenv('TITO_DISCORD_WEBHOOK', secret)
+
+    async def boom(*a, **k):
+        raise RuntimeError(f'failed posting to {secret}')
+
+    monkeypatch.setattr(middleware, 'post_webhook', boom)
+    with caplog.at_level(logging.DEBUG):
+        asyncio.run(middleware._tito_notify('x'))
+    assert 'SECRETTOKEN' not in caplog.text

@@ -57,14 +57,40 @@ def test_no_leading_system_returns_messages_unchanged():
     assert out == messages
 
 
-def test_mid_conversation_system_at_front_is_not_merged_into_leading_run():
-    # SOURCE: brief PATCH C — a mid_conversation marker stops the leading run.
+def test_mid_conversation_system_at_front_is_exempt_from_merge():
+    # Original algorithm: every non-exempt system msg merges into index 0;
+    # mid_conversation msgs stay in place among the others.
     messages = [
         {'role': 'system', 'content': 'status', 'mid_conversation': True},
         {'role': 'system', 'content': 'real system'},
         {'role': 'user', 'content': 'x'},
     ]
     out = merge_system_messages(messages)
-    # leading run is empty (first msg is mid_conversation) -> unchanged order
-    assert out[0] == {'role': 'system', 'content': 'status', 'mid_conversation': True}
-    assert out[1] == {'role': 'system', 'content': 'real system'}
+    assert out == [
+        {'role': 'system', 'content': 'real system'},
+        {'role': 'system', 'content': 'status', 'mid_conversation': True},
+        {'role': 'user', 'content': 'x'},
+    ]
+
+
+def test_non_tito_output_identical_to_origin_main_algorithm():
+    # B2: without mid_conversation, every system msg (anywhere, even after a user
+    # msg) merges into one at index 0 and empty ones drop -- the original algorithm.
+    messages = [
+        {'role': 'user', 'content': 'a'},
+        {'role': 'system', 'content': 'S1'},
+        {'role': 'assistant', 'content': 'b'},
+        {'role': 'system', 'content': ''},
+        {'role': 'system', 'content': 'S2'},
+        {'role': 'user', 'content': 'c'},
+    ]
+    out = merge_system_messages(messages)
+    assert out == [
+        {'role': 'system', 'content': 'S1\nS2'},
+        {'role': 'user', 'content': 'a'},
+        {'role': 'assistant', 'content': 'b'},
+        {'role': 'user', 'content': 'c'},
+    ]
+    assert merge_system_messages([{'role': 'system', 'content': ''}, {'role': 'user', 'content': 'q'}]) == [
+        {'role': 'user', 'content': 'q'}
+    ]

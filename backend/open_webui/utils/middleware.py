@@ -3058,7 +3058,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             tito_system = chat_meta['tito_system']
 
         metadata['tito_system'] = tito_system
-        frozen = f'{tito_system["block1"]}\n\n{tito_system["block2"]}'
+        frozen = tito.join_tito_system(tito_system['block1'], tito_system['block2'])
         form_data['messages'] = tito.apply_frozen_system(form_data['messages'], frozen)
 
         status_text = tito.build_tito_status(metadata.get('variables', {}))
