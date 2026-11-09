@@ -8,12 +8,14 @@ Every expected value names its SOURCE: an existing file:line when one exists,
 otherwise the locked plan / vet document that defines the value. No value is
 "because the spec says".
 """
+
 import hashlib
 from types import SimpleNamespace
 
 from open_webui.utils import tito
 
 # --- PATCH G: model gating -------------------------------------------------
+
 
 def test_is_tito_model_true_for_id_tito():
     # SOURCE: brief "all gated on model id 'tito'"; model id field is `model['id']`
@@ -49,6 +51,7 @@ def test_lock_background_tasks_strips_follow_up_and_tags_keeps_title():
 
 # --- PATCH A: memory snapshot (block 2) ------------------------------------
 
+
 def test_build_memory_snapshot_sorted_plain_no_timestamps():
     # SOURCE: DECISIONS — "all memories, sorted, plain text, no timestamps".
     # Label format `path: content` (else bare content) mirrors memory_label
@@ -64,8 +67,8 @@ def test_build_memory_snapshot_sorted_plain_no_timestamps():
     # sorted by (path or '', content or '', id or ''): no-path rows first ('' < any
     # path), then by content code point ('mua...' < 'thích...' since 'm' < 't'),
     # then the path row last. No timestamps anywhere.
-    assert lines[0] == '- mua xăng ở Fresno'          # no path, content 'm...'
-    assert lines[1] == '- thích Tuấn Ngọc'           # no path, content 't...'
+    assert lines[0] == '- mua xăng ở Fresno'  # no path, content 'm...'
+    assert lines[1] == '- thích Tuấn Ngọc'  # no path, content 't...'
     assert lines[2] == '- sức khỏe: bảo hiểm 35 đô'  # has path -> sorts last
     # invariant: no timestamps leak into the snapshot
     assert 'updated_at' not in snapshot and 'created_at' not in snapshot
@@ -88,6 +91,7 @@ def test_build_memory_snapshot_skips_empty_content():
 
 
 # --- PATCH A: frozen system (block1 + block2) ------------------------------
+
 
 def test_build_tito_system_raw_prompt_untemplated():
     # SOURCE: brief PATCH A — "block1 raw Tito prompt ... no {{ }} templating".
@@ -139,6 +143,7 @@ def test_sha256_hex_matches_stdlib():
 
 # --- PATCH A: drop/insert of system messages -------------------------------
 
+
 def test_apply_frozen_system_drops_non_mid_conversation_system_and_prepends():
     # SOURCE: brief PATCH A — "drop every role:system msg (incl Conduit index-0)
     # except mid-conversation status msgs; insert exactly one frozen system".
@@ -157,6 +162,7 @@ def test_apply_frozen_system_drops_non_mid_conversation_system_and_prepends():
 
 
 # --- PATCH C: status in user message meta ----------------------------------
+
 
 def test_build_tito_status_message_is_marked_mid_conversation():
     # SOURCE: brief PATCH C — "msgs marked mid_conversation pass through in place";

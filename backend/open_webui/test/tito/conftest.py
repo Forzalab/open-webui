@@ -4,6 +4,7 @@ SOURCE of path layout: the package lives at ``backend/open_webui``; this file si
 at ``backend/open_webui/test/tito/conftest.py``, so ``../..`` reaches ``backend/``.
 No-op when ``open_webui`` is already installed (build env).
 """
+
 import os
 import sys
 

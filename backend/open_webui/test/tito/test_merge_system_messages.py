@@ -6,6 +6,7 @@ mid_conversation-marked system messages through in place. These tests FAIL today
 on the mid_conversation case (they get collapsed to position 0) and on the
 backward-compat case when content extraction differs.
 """
+
 from open_webui.utils.misc import merge_system_messages
 
 
