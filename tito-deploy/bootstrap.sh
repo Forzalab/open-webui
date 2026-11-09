@@ -16,7 +16,10 @@ if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
   chmod a+r /etc/apt/keyrings/docker.asc
   . /etc/os-release
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
+  CODENAME="${VERSION_CODENAME}"
+  # Docker may not publish a repo for a brand-new Ubuntu yet (26.04 box) -> fall back to noble (24.04).
+  curl -fsI "https://download.docker.com/linux/ubuntu/dists/${CODENAME}/Release" >/dev/null 2>&1 || CODENAME=noble
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${CODENAME} stable" \
     > /etc/apt/sources.list.d/docker.list
   apt-get update -qq
   install_pkgs docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
@@ -41,6 +44,13 @@ ufw allow 22/tcp  >/dev/null
 ufw allow 80/tcp  >/dev/null
 ufw allow 443/tcp >/dev/null
 ufw --force enable >/dev/null
+
+# 3b. SSH: root by key only (box ships PermitRootLogin yes).
+echo 'PermitRootLogin prohibit-password' > /etc/ssh/sshd_config.d/00-tito.conf
+systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+
+# 3c. Let user tito run docker.
+id tito >/dev/null 2>&1 && usermod -aG docker tito || true
 
 # 4. 2GB swapfile if none exists.
 if ! swapon --show 2>/dev/null | grep -q .; then
