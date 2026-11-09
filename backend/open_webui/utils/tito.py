@@ -62,14 +62,14 @@ def build_memory_snapshot(memories: list) -> str:
     return '\n'.join(lines)
 
 
-def build_tito_blocks(prompt_raw: str, memories: list) -> tuple[str, str]:
-    block1 = prompt_raw
+def build_tito_blocks(prompt_raw: str | None, memories: list) -> tuple[str, str]:
+    block1 = prompt_raw or ''
     block2 = f'{SNAPSHOT_HEADING}\n{build_memory_snapshot(memories)}'
     return block1, block2
 
 
-def build_tito_blocks_unavailable(prompt_raw: str) -> tuple[str, str]:
-    block1 = prompt_raw
+def build_tito_blocks_unavailable(prompt_raw: str | None) -> tuple[str, str]:
+    block1 = prompt_raw or ''
     block2 = f'{SNAPSHOT_HEADING}\n{MEMORY_UNAVAILABLE_SENTINEL}'
     return block1, block2
 
@@ -142,6 +142,32 @@ def expand_tito_status(messages: list[dict]) -> list[dict]:
             if status:
                 out.append(build_tito_status_message(status))
     return out
+
+
+def ensure_tito_status(messages: list[dict], status_text: str) -> tuple[list[dict], str | None]:
+    """Attach the status to the newest user message, exactly once.
+
+    Returns ``(messages, to_persist)``.  If the newest user message already carries
+    ``meta.tito_status`` (regenerate / continue / tool-resume) the stored status is
+    replayed (a status message is inserted only if ``expand_tito_status`` has not
+    already done so) and ``to_persist`` is ``None``; the stored value is never
+    overwritten.  Otherwise the new status is stored on the message and inserted,
+    and ``to_persist`` is the text to write to the DB.
+    """
+    messages = list(messages)
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get('role') != 'user':
+            continue
+        stored = (messages[i].get('meta') or {}).get('tito_status')
+        if stored:
+            nxt = messages[i + 1] if i + 1 < len(messages) else None
+            if not (nxt and nxt.get('role') == 'system' and nxt.get('mid_conversation')):
+                messages.insert(i + 1, build_tito_status_message(stored))
+            return messages, None
+        messages[i] = store_tito_status(messages[i], status_text)
+        messages.insert(i + 1, build_tito_status_message(status_text))
+        return messages, status_text
+    return messages, None
 
 
 def tito_chat_error(chat, chat_id: str, is_new_chat: bool = False) -> str | None:

@@ -199,7 +199,8 @@ async def _tito_notify(message: str, event_data: dict | None = None) -> None:
     try:
         await post_webhook('open-webui', url, message, event_data or {})
     except Exception:
-        log.debug('Tito Discord notification failed', exc_info=True)
+        # Never log the exception text/traceback: it can embed the webhook URL.
+        log.debug('Tito Discord notification failed (%s)', type(e).__name__)
 
 
 def _is_tool_result_error(value: Any) -> bool:
@@ -3061,12 +3062,13 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         form_data['messages'] = tito.apply_frozen_system(form_data['messages'], frozen)
 
         status_text = tito.build_tito_status(metadata.get('variables', {}))
-        messages = form_data['messages']
-        for i in range(len(messages) - 1, -1, -1):
-            if messages[i].get('role') == 'user':
-                messages[i] = tito.store_tito_status(messages[i], status_text)
-                messages.insert(i + 1, tito.build_tito_status_message(status_text))
-                break
+        form_data['messages'], status_to_persist = tito.ensure_tito_status(form_data['messages'], status_text)
+        if status_to_persist and is_saved_chat_id(chat_id) and user_message_id:
+            stored_user_message = await Chats.get_message_by_id_and_message_id(chat_id, user_message_id) or {}
+            if not (stored_user_message.get('meta') or {}).get('tito_status'):
+                await Chats.upsert_message_to_chat_by_id_and_message_id(
+                    chat_id, user_message_id, {'meta': {'tito_status': status_to_persist}}, touch=False
+                )
 
     form_data = normalize_messages_for_model(form_data)
 
