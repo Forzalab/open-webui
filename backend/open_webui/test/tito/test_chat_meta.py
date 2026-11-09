@@ -20,5 +20,5 @@ def test_upsert_message_to_history_preserves_tito_status():
         'm1',
         {'role': 'user', 'content': 'chào edited', 'meta': {'some_other': 'y'}},
     )
-    assert updated['messages']['m1']['meta']['tito_status'] == 'S'
-    assert updated['messages']['m1']['meta']['some_other'] == 'y'
+    assert updated['meta']['tito_status'] == 'S'
+    assert updated['meta']['some_other'] == 'y'
