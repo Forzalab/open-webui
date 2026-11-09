@@ -726,29 +726,31 @@ def pop_system_message(messages: list[dict]) -> tuple[dict | None, list[dict]]:
 
 def merge_system_messages(messages: list[dict]) -> list[dict]:
     """
-    Merge all system messages into one at position 0.
+    Merge the leading run of system messages into one at position 0.
 
     Some chat templates (e.g. Qwen) require exactly one system
     message at the start.  Multiple pipeline stages may each
     insert their own system message; this function consolidates
-    them.
+    them.  Mid-conversation system messages (marked by a truthy
+    top-level ``mid_conversation`` key) stop the leading run and
+    pass through in place.
     """
     system_contents: list[str] = []
-    other_messages: list[dict] = []
-
-    for message in messages:
-        if message.get('role') == 'system':
-            content = get_content_from_message(message)
-            if content:
-                system_contents.append(content)
-        else:
-            other_messages.append(message)
+    idx = 0
+    while idx < len(messages):
+        message = messages[idx]
+        if message.get('role') != 'system' or message.get('mid_conversation'):
+            break
+        content = get_content_from_message(message)
+        if content:
+            system_contents.append(content)
+        idx += 1
 
     if not system_contents:
-        return other_messages
+        return messages
 
     merged = {'role': 'system', 'content': '\n'.join(system_contents)}
-    return [merged, *other_messages]
+    return [merged, *messages[idx:]]
 
 
 def update_message_content(message: dict, content: str, append: bool = True) -> dict:

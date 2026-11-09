@@ -1059,6 +1059,21 @@ class ChatTable:
             if removed:
                 await self.delete_orphan_tags_for_user(list(removed), user.id, db=session)
 
+    async def update_chat_meta_by_id(self, id: str, meta_patch: dict) -> None:
+        """Merge a patch into a chat's free-form ``meta`` column.
+
+        Reads and writes only the meta column (never the chat blob), so it is
+        safe to call on every turn without round-tripping the whole history.
+        """
+        async with get_async_db_context() as session:
+            row = (await session.execute(select(Chat.meta).filter_by(id=id))).one_or_none()
+            if row is None:
+                return None
+
+            meta = row[0] or {}
+            await session.execute(update(Chat).filter_by(id=id).values(meta={**meta, **meta_patch}))
+            await session.commit()
+
     async def get_chat_title_by_id(self, id: str) -> str | None:
         async with get_async_db_context() as session:
             result = await session.execute(select(Chat.title).filter_by(id=id))
@@ -1155,7 +1170,7 @@ class ChatTable:
             existing_meta = existing_meta if isinstance(existing_meta, dict) else {}
             incoming_meta = message.get('meta')
             if isinstance(incoming_meta, dict):
-                if set(incoming_meta) <= {'voice', 'task_id', 'response_started_at', 'response_ended_at'}:
+                if set(incoming_meta) <= {'voice', 'task_id', 'response_started_at', 'response_ended_at', 'tito_status'}:
                     message = {**message, 'meta': {**existing_meta, **incoming_meta}}
                 else:
                     message = {
@@ -1163,7 +1178,7 @@ class ChatTable:
                         'meta': {
                             **{
                                 key: existing_meta[key]
-                                for key in ('voice', 'task_id', 'response_started_at', 'response_ended_at')
+                                for key in ('voice', 'task_id', 'response_started_at', 'response_ended_at', 'tito_status')
                                 if key in existing_meta
                             },
                             **incoming_meta,
