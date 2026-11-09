@@ -38,35 +38,35 @@ user.
 `tools` = `backend/open_webui/utils/tools.py`, `chats` = `backend/open_webui/models/chats.py`,
 `memories` = `backend/open_webui/models/memories.py`. ✓ = exact; Δ = doc line off, real used.
 
-| Doc claim | Real location | Status |
-|---|---|---|
-| `use_builtin_tools` mw:2069-2073 | mw:2070-2074 | Δ (+1) |
-| `chat = get_chat_by_id` mw:2068 | mw:2068 | ✓ |
-| `load_messages_from_db` drops empty assistant mw:1879-1883 | fn mw:1860, filter mw:1882 | Δ |
-| re-attach system after DB load mw:2110-2111 | mw:2113-2114 | Δ |
-| `apply_system_prompt_to_body` replace mw:2205 | mw:2205-2212 | ✓ |
-| `variables = pop` mw:2322 | mw:2322 | ✓ |
-| `features = pop` mw:2345 | mw:2345 | ✓ |
-| memory permission check (admin bypass) mw:2366 | mw:2366 | ✓ |
-| `tool_ids = pop` mw:2426 | mw:2426 | ✓ |
-| `skill_ids` mw:2482-2483 | mw:2482-2483 | ✓ |
-| MCP `instructions` into system mw:2691 | mw:2690-2695 | ✓ |
-| MCP connect failure `log.exception + continue` mw:2725-2740 | mw:2725-2739 | Δ |
-| terminal system prompt mw:2779 | mw:2779 | ✓ |
-| tool-server system prompt mw:2796 | mw:2796 | ✓ |
-| builtin tools injection mw:2826-2829 | mw:2828-2872 (call mw:2854) | ✓ |
-| `is_file_context_enabled` mw:2926-2932 | fn tools:588-593, call mw:2926 | Δ |
-| `normalize_messages_for_model` → `merge_system_messages` | mw:233-236, call mw:3007 | ✓ |
-| `merge_system_messages` misc:727 | misc:727-751 | ✓ |
-| `add_or_update_system_message` misc:778 | misc:778-794 | ✓ |
-| `get_message_list` misc:190 | misc:190 | ✓ |
-| `MESSAGE_REPLAY_KEYS` mw:1857 | mw:1857 | ✓ |
-| memory tools gating tools:808-814 | tools:809-827 | Δ |
-| file tools gating tools:733-750 | tools:734-750 (inject 743-750) | Δ |
-| `chat`/`meta` JSON columns chats:189,198 | chats:189, 198 | ✓ |
-| `ChatModel.meta` default `{}` | chats:254 | ✓ |
-| `update_chat_tags_by_id` (meta writer template) | chats:1036-1051 | ✓ |
-| `upsert_message_to_history` (meta preservation) | chats:1148-1171 | ✓ |
+| Doc claim                                                   | Real location                  | Status |
+| ----------------------------------------------------------- | ------------------------------ | ------ |
+| `use_builtin_tools` mw:2069-2073                            | mw:2070-2074                   | Δ (+1) |
+| `chat = get_chat_by_id` mw:2068                             | mw:2068                        | ✓      |
+| `load_messages_from_db` drops empty assistant mw:1879-1883  | fn mw:1860, filter mw:1882     | Δ      |
+| re-attach system after DB load mw:2110-2111                 | mw:2113-2114                   | Δ      |
+| `apply_system_prompt_to_body` replace mw:2205               | mw:2205-2212                   | ✓      |
+| `variables = pop` mw:2322                                   | mw:2322                        | ✓      |
+| `features = pop` mw:2345                                    | mw:2345                        | ✓      |
+| memory permission check (admin bypass) mw:2366              | mw:2366                        | ✓      |
+| `tool_ids = pop` mw:2426                                    | mw:2426                        | ✓      |
+| `skill_ids` mw:2482-2483                                    | mw:2482-2483                   | ✓      |
+| MCP `instructions` into system mw:2691                      | mw:2690-2695                   | ✓      |
+| MCP connect failure `log.exception + continue` mw:2725-2740 | mw:2725-2739                   | Δ      |
+| terminal system prompt mw:2779                              | mw:2779                        | ✓      |
+| tool-server system prompt mw:2796                           | mw:2796                        | ✓      |
+| builtin tools injection mw:2826-2829                        | mw:2828-2872 (call mw:2854)    | ✓      |
+| `is_file_context_enabled` mw:2926-2932                      | fn tools:588-593, call mw:2926 | Δ      |
+| `normalize_messages_for_model` → `merge_system_messages`    | mw:233-236, call mw:3007       | ✓      |
+| `merge_system_messages` misc:727                            | misc:727-751                   | ✓      |
+| `add_or_update_system_message` misc:778                     | misc:778-794                   | ✓      |
+| `get_message_list` misc:190                                 | misc:190                       | ✓      |
+| `MESSAGE_REPLAY_KEYS` mw:1857                               | mw:1857                        | ✓      |
+| memory tools gating tools:808-814                           | tools:809-827                  | Δ      |
+| file tools gating tools:733-750                             | tools:734-750 (inject 743-750) | Δ      |
+| `chat`/`meta` JSON columns chats:189,198                    | chats:189, 198                 | ✓      |
+| `ChatModel.meta` default `{}`                               | chats:254                      | ✓      |
+| `update_chat_tags_by_id` (meta writer template)             | chats:1036-1051                | ✓      |
+| `upsert_message_to_history` (meta preservation)             | chats:1148-1171                | ✓      |
 
 **Critical discovery (PATCH A source):** `request.app.state.MODELS` redacts
 `info.params` via `public_model_params` (utils/models.py:36-57), which drops `system`.
@@ -82,6 +82,7 @@ thread it through `metadata`.
 so its pure functions are unit-testable without a live app.
 
 Constants:
+
 - `TITO_MODEL_ID = 'tito'`
 - `SNAPSHOT_HEADING = 'NHỮNG ĐIỀU TITO NHỚ VỀ ÔNG'` (vet M5).
 - `NO_MEMORIES_SENTINEL = '(chưa có ký ức nào)'` (vet M6).
@@ -90,6 +91,7 @@ Constants:
 - `TITO_TEMP_CHAT_ERROR` / `TITO_NO_CHAT_ERROR` (Vietnamese, Orc O3 — exact strings in KEY).
 
 Pure functions (contract — exact names/signatures the red tests assert):
+
 - `sha256_hex(text) -> str`
 - `is_tito_model(model) -> bool`
 - `tito_features() -> dict` → `{'memory': True}`
@@ -130,7 +132,7 @@ Pure functions (contract — exact names/signatures the red tests assert):
      `path: content` if path else `content` (memory.py:43-44), one per line `- `, no
      timestamps, empty-`content` rows skipped.
 2. Store BOTH blocks: `chat.meta['tito_system'] = {'block1':…, 'block2':…,
-   'sha256': sha256_hex(block1 + '\n\n' + block2)}` (DECISIONS + O7). Persist via the new
+'sha256': sha256_hex(block1 + '\n\n' + block2)}` (DECISIONS + O7). Persist via the new
    meta writer (O1, §9).
 3. Later turns: `combined = get_frozen_tito_system(meta)` and replay it byte-identical.
    Never re-read live `model_info.params.system` on later turns.
@@ -168,7 +170,7 @@ Pure functions (contract — exact names/signatures the red tests assert):
    `role:system` messages. A truthy top-level `mid_conversation` key stops the run and
    passes through in place. With no leading system content, return the list unchanged.
 2. Status marker = **top-level key** (Orc C1): `{"role":"system","content":…,
-   "mid_conversation":true}`. OWUI and pipe use exactly this.
+"mid_conversation":true}`. OWUI and pipe use exactly this.
 3. Status text stored in the user message's `meta.tito_status` (O4/H2), NOT a tree node
    (no Conduit parent-resolution risk). `meta` is in `MESSAGE_REPLAY_KEYS` (mw:1857).
 4. On replay, `expand_tito_status` inserts the mid_conversation system message right
@@ -188,8 +190,8 @@ misc.py:778). So leading run == old "all at index 0" for them. Guarded by
 (missing → omit that line). `budget_counters` is a hook arg, empty for now. Built in OWUI
 from `metadata['variables']` (main.py:1329), NOT in the pipe. The `<context>` wrapper is
 intentional: the pipe treats `<context>` as volatile and avoids putting a cache breakpoint
-there (H3: never cache_control status messages). This is distinct from vet H4, which warns
-against `<context>` only in the *user-message fallback text* (a path we do not take).
+there (H3: never cache*control status messages). This is distinct from vet H4, which warns
+against `<context>` only in the \_user-message fallback text* (a path we do not take).
 
 Flow: build status → `build_tito_status_message` → append right after the newest user
 message in `form_data['messages']` → `store_tito_status` on that user message so it
@@ -198,6 +200,7 @@ persists (O2 guarantees the re-upsert keeps it).
 ## 8. PATCH G — server lock (force, not just ignore)
 
 For `model_id == 'tito'`:
+
 1. **Ignored client inputs**: `tool_ids`, `filter_ids`, `skill_ids`, `tool_servers`,
    client `params` (esp. `reasoning_effort`, `function_calling`, `max_tokens`).
 2. **FORCE `features = {'memory': True}`**, all else false (B3). Memory tools need
@@ -230,17 +233,19 @@ Config (not code): grant Dad's group `features.memories` + `chat.file_upload`
 ## 10. O3 — temporary / missing chat guard
 
 For `tito`: `tito_chat_error(chat, chat_id, is_new_chat)` →
+
 - temporary chat (`is_temporary_chat_id`) → `TITO_TEMP_CHAT_ERROR` (block, 403);
 - saved chat_id but `chat is None` and NOT a brand-new chat → `TITO_NO_CHAT_ERROR`
   (loud fail);
 - otherwise None.
-On error: `log.error` + Discord. A brand-new saved chat legitimately has no row yet
-(freeze path), so `is_new_chat` passes. Also block temporary chats for Dad via the
-`chat.temporary` permission (config).
+  On error: `log.error` + Discord. A brand-new saved chat legitimately has no row yet
+  (freeze path), so `is_new_chat` passes. Also block temporary chats for Dad via the
+  `chat.temporary` permission (config).
 
 ## 11. B5 — startup self-check (O6/O8)
 
 Runs once at startup, after model prefetch (main.py:453-475, before main.py:519):
+
 1. Resolve the real Tito model dict (`app.state.MODELS['tito']`) and a real NON-admin
    user (`TITO_SELFCHECK_USER_ID`; unset → warn + skip).
 2. `tito_model_checks(model)` → no `capabilities.memory=False`,
@@ -249,7 +254,7 @@ Runs once at startup, after model prefetch (main.py:453-475, before main.py:519)
 4. `tito_config_checks(...)` (O8): `ENABLE_PERSISTENT_CONFIG=False`,
    `RAG_SYSTEM_CONTEXT=False`, `memories.system_context.enable=False`.
 5. Call `get_builtin_tools(request, extra_params, features=tito_features(), model,
-   is_note_chat=False)` with `extra_params['__user__']` = the non-admin user and a
+is_note_chat=False)` with `extra_params['__user__']` = the non-admin user and a
    synthetic `metadata['files']` carrying one dummy file (exercises tools.py:734-750).
 6. `tito_missing_tools(names)` empty (memory + file tools present).
 7. Dump the resolved tools to the frozen file `TITO_TOOLS_FILE` (Orc C3): JSON list in
@@ -273,62 +278,63 @@ Runs once at startup, after model prefetch (main.py:453-475, before main.py:519)
 
 ## 13. CLAUSE → TEST table
 
-| Clause | Test | Status |
-|---|---|---|
-| G gate id `tito` | `test_is_tito_model_true/false` | RED |
-| G FORCE features memory-only | `test_tito_features_forces_memory_only` | RED |
-| G/O5 background_tasks wholesale | `test_lock_background_tasks_wholesale_title_only` / `_empty_input` | RED |
-| O5 include_usage | `test_tito_stream_options_include_usage` | RED |
-| O5 max_tokens 16000 | `test_tito_max_tokens_pinned` | RED |
-| A snapshot sorted/plain/no-timestamps | `test_build_memory_snapshot_sorted_plain_no_timestamps` | RED |
-| A empty → sentinel (M6) | `test_build_memory_snapshot_empty_returns_sentinel` | RED |
-| A skip empty content | `test_build_memory_snapshot_skips_empty_content` | RED |
-| A/O7 block1 raw, no `{{ }}` + two blocks | `test_build_tito_blocks_raw_prompt_untemplated` | RED |
-| A/M5 heading markers | `test_build_tito_blocks_heading_avoids_volatile_markers` | RED |
-| A unavailable sentinel | `test_build_tito_blocks_unavailable_uses_unavailable_sentinel` | RED |
-| O7 store both blocks + sha256 | `test_freeze_stores_two_blocks_and_sha256` | RED |
-| O7 combined + blocks accessors | `test_get_frozen_returns_combined_and_blocks` | RED |
-| A absent → None | `test_get_frozen_returns_none_when_absent` | RED |
-| A sha256 format | `test_sha256_hex_matches_stdlib` | RED |
-| A drop system except mid_conversation | `test_apply_frozen_system_drops_non_mid_conversation_system_and_prepends` | RED |
-| C1 top-level marker | `test_build_tito_status_message_is_marked_mid_conversation` | RED |
-| C/O4 status in user meta | `test_store_tito_status_writes_user_meta` | RED |
-| C/O4 expand after user msg | `test_expand_tito_status_inserts_system_after_user_message` | RED |
-| C expand no-op | `test_expand_tito_status_noop_without_status_meta` | RED |
-| O4 status builder all vars | `test_build_tito_status_all_vars` | RED |
-| O4 omit missing | `test_build_tito_status_omits_missing_vars` | RED |
-| O4 budget hook empty | `test_build_tito_status_budget_hook_empty_by_default` | RED |
-| O3 temp chat block | `test_tito_chat_error_temp_chat_blocked` | RED |
-| O3 missing chat not-new | `test_tito_chat_error_missing_chat_not_new` | RED |
-| O3 new chat ok | `test_tito_chat_error_ok_new_chat` | RED |
-| O3 existing ok | `test_tito_chat_error_ok_existing_chat` | RED |
-| O6 required names | `test_tito_required_tool_names_has_memory_and_file` | RED |
-| O6 missing tools | `test_tito_missing_tools_none/reports` | RED |
-| O6 model checks | `test_tito_model_checks_ok/flags` | RED |
-| O8 config checks | `test_tito_config_checks_all_false_ok/flags_truthy` | RED |
-| C merge leading run only | `test_merges_leading_run_only_keeps_mid_conversation_in_place` | RED |
-| C backward compat (must NOT break) | `test_backward_compatible_without_mid_conversation_marker` | green now, stay green |
-| C no leading run → unchanged | `test_no_leading_system_returns_messages_unchanged` | RED |
-| C mid_conversation at front not merged | `test_mid_conversation_system_at_front_is_not_merged_into_leading_run` | RED |
-| O2 tito_status preserved on re-upsert | `test_upsert_message_to_history_preserves_tito_status` | RED |
+| Clause                                   | Test                                                                      | Status                |
+| ---------------------------------------- | ------------------------------------------------------------------------- | --------------------- |
+| G gate id `tito`                         | `test_is_tito_model_true/false`                                           | RED                   |
+| G FORCE features memory-only             | `test_tito_features_forces_memory_only`                                   | RED                   |
+| G/O5 background_tasks wholesale          | `test_lock_background_tasks_wholesale_title_only` / `_empty_input`        | RED                   |
+| O5 include_usage                         | `test_tito_stream_options_include_usage`                                  | RED                   |
+| O5 max_tokens 16000                      | `test_tito_max_tokens_pinned`                                             | RED                   |
+| A snapshot sorted/plain/no-timestamps    | `test_build_memory_snapshot_sorted_plain_no_timestamps`                   | RED                   |
+| A empty → sentinel (M6)                  | `test_build_memory_snapshot_empty_returns_sentinel`                       | RED                   |
+| A skip empty content                     | `test_build_memory_snapshot_skips_empty_content`                          | RED                   |
+| A/O7 block1 raw, no `{{ }}` + two blocks | `test_build_tito_blocks_raw_prompt_untemplated`                           | RED                   |
+| A/M5 heading markers                     | `test_build_tito_blocks_heading_avoids_volatile_markers`                  | RED                   |
+| A unavailable sentinel                   | `test_build_tito_blocks_unavailable_uses_unavailable_sentinel`            | RED                   |
+| O7 store both blocks + sha256            | `test_freeze_stores_two_blocks_and_sha256`                                | RED                   |
+| O7 combined + blocks accessors           | `test_get_frozen_returns_combined_and_blocks`                             | RED                   |
+| A absent → None                          | `test_get_frozen_returns_none_when_absent`                                | RED                   |
+| A sha256 format                          | `test_sha256_hex_matches_stdlib`                                          | RED                   |
+| A drop system except mid_conversation    | `test_apply_frozen_system_drops_non_mid_conversation_system_and_prepends` | RED                   |
+| C1 top-level marker                      | `test_build_tito_status_message_is_marked_mid_conversation`               | RED                   |
+| C/O4 status in user meta                 | `test_store_tito_status_writes_user_meta`                                 | RED                   |
+| C/O4 expand after user msg               | `test_expand_tito_status_inserts_system_after_user_message`               | RED                   |
+| C expand no-op                           | `test_expand_tito_status_noop_without_status_meta`                        | RED                   |
+| O4 status builder all vars               | `test_build_tito_status_all_vars`                                         | RED                   |
+| O4 omit missing                          | `test_build_tito_status_omits_missing_vars`                               | RED                   |
+| O4 budget hook empty                     | `test_build_tito_status_budget_hook_empty_by_default`                     | RED                   |
+| O3 temp chat block                       | `test_tito_chat_error_temp_chat_blocked`                                  | RED                   |
+| O3 missing chat not-new                  | `test_tito_chat_error_missing_chat_not_new`                               | RED                   |
+| O3 new chat ok                           | `test_tito_chat_error_ok_new_chat`                                        | RED                   |
+| O3 existing ok                           | `test_tito_chat_error_ok_existing_chat`                                   | RED                   |
+| O6 required names                        | `test_tito_required_tool_names_has_memory_and_file`                       | RED                   |
+| O6 missing tools                         | `test_tito_missing_tools_none/reports`                                    | RED                   |
+| O6 model checks                          | `test_tito_model_checks_ok/flags`                                         | RED                   |
+| O8 config checks                         | `test_tito_config_checks_all_false_ok/flags_truthy`                       | RED                   |
+| C merge leading run only                 | `test_merges_leading_run_only_keeps_mid_conversation_in_place`            | RED                   |
+| C backward compat (must NOT break)       | `test_backward_compatible_without_mid_conversation_marker`                | green now, stay green |
+| C no leading run → unchanged             | `test_no_leading_system_returns_messages_unchanged`                       | RED                   |
+| C mid_conversation at front not merged   | `test_mid_conversation_system_at_front_is_not_merged_into_leading_run`    | RED                   |
+| O2 tito_status preserved on re-upsert    | `test_upsert_message_to_history_preserves_tito_status`                    | RED                   |
 
 ### 13.1 NOT COVERED (and why)
 
-| Effect | Why not covered | Substitute check |
-|---|---|---|
-| `apply_tito_lock` end-to-end | async, needs Request/Config/DB | pure outputs tested; KISS test 1-9 |
-| `use_builtin_tools` forced (no session) | needs full process_chat_payload | code review mw:2070 + B5 self-check (no-session, non-admin) |
-| freeze-on-first + replay byte-identical | needs persisted Chat + two turns | pure roundtrip; KISS system sha256 identical |
-| O1 `update_chat_meta_by_id` write | needs DB | modeled on tested `update_chat_tags_by_id`; KISS replay |
-| B5 self-check runs + Discord | needs live app + webhook | env-gated; KISS startup line |
-| C3 frozen-tools dump to `TITO_TOOLS_FILE` | needs resolved MCP/calendar tools | B5 self-check asserts the names; dump helper code-reviewed |
-| non-admin permission grant (config) | not code | B5 self-check asserts tools for a non-admin |
+| Effect                                    | Why not covered                   | Substitute check                                            |
+| ----------------------------------------- | --------------------------------- | ----------------------------------------------------------- |
+| `apply_tito_lock` end-to-end              | async, needs Request/Config/DB    | pure outputs tested; KISS test 1-9                          |
+| `use_builtin_tools` forced (no session)   | needs full process_chat_payload   | code review mw:2070 + B5 self-check (no-session, non-admin) |
+| freeze-on-first + replay byte-identical   | needs persisted Chat + two turns  | pure roundtrip; KISS system sha256 identical                |
+| O1 `update_chat_meta_by_id` write         | needs DB                          | modeled on tested `update_chat_tags_by_id`; KISS replay     |
+| B5 self-check runs + Discord              | needs live app + webhook          | env-gated; KISS startup line                                |
+| C3 frozen-tools dump to `TITO_TOOLS_FILE` | needs resolved MCP/calendar tools | B5 self-check asserts the names; dump helper code-reviewed  |
+| non-admin permission grant (config)       | not code                          | B5 self-check asserts tools for a non-admin                 |
 
 ## 14. Proof command
 
 ```
 cd backend && python -m pytest open_webui/test/tito/ -q
 ```
+
 Today: RED — `test_tito.py` import error (`open_webui.utils.tito` missing);
 `test_merge_system_messages.py` fails the mid_conversation cases; `test_chat_meta.py`
 fails the `tito_status` preservation case. After the patches: all green.

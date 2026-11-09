@@ -63,9 +63,11 @@ pipe. All changes gated on `model.get('id') == 'tito'` (process_chat_payload) or
 ## Red test = done proof
 
 Run exactly:
+
 ```
 cd backend && python -m pytest open_webui/test/tito/ -q
 ```
+
 Paste its last lines. Pass = all green (incl. the backward-compat and O2 tests). If
 `open_webui` is not importable in your env, that IS the red state for `test_tito.py`
 (import error) — report it and note `test_merge_system_messages.py` /
@@ -74,6 +76,7 @@ Paste its last lines. Pass = all green (incl. the backward-compat and O2 tests).
 ## Stop-and-ask rule
 
 Stop and ask (exact question as last message) when:
+
 - any file:line in SPEC §4/§6/§8/§9/§11 does not match the code you see;
 - `model_info.params.system` is absent/empty for the `tito` model row;
 - `apply_tito_lock` cannot run before main.py:1116 without breaking `title_generation`;
