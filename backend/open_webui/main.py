@@ -52,6 +52,7 @@ from open_webui.config import (
     ENABLE_ADMIN_EXPORT,
     ENABLE_ONEDRIVE_BUSINESS,
     ENABLE_ONEDRIVE_PERSONAL,
+    ENABLE_PERSISTENT_CONFIG,
     # OpenAI
     ENV,
     FRONTEND_BUILD_DIR,
@@ -107,6 +108,7 @@ from open_webui.env import (
     LOG_FORMAT,
     MAX_BODY_LOG_SIZE,
     # Redis
+    RAG_SYSTEM_CONTEXT,
     REDIS_KEY_PREFIX,
     REDIS_TASK_TTL,
     REDIS_URL,
@@ -300,6 +302,17 @@ if SAFE_MODE:
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
+
+
+async def _tito_notify(message: str, event_data: dict | None = None) -> None:
+    """Best-effort Discord alert for Tito (env-gated, never raises)."""
+    url = os.getenv('TITO_DISCORD_WEBHOOK', '')
+    if not url:
+        return
+    try:
+        await post_webhook('open-webui', url, message, event_data or {})
+    except Exception:
+        log.debug('Tito Discord notification failed', exc_info=True)
 
 
 async def emit_chat_list_event(metadata: dict, chat_id: str):
@@ -1102,6 +1115,26 @@ async def _set_direct_model(request: Request, model_item: dict, user) -> None:
     request.state.model = model_item
 
 
+def apply_tito_lock(form_data: dict, model_id, user) -> None:
+    """Force the server-side Tito configuration, ignoring client UI state."""
+    if model_id != tito.TITO_MODEL_ID:
+        return
+
+    # Ignored client inputs (stripped wholesale).
+    form_data.pop('tool_ids', None)
+    form_data.pop('filter_ids', None)
+    form_data.pop('skill_ids', None)
+    form_data.pop('tool_servers', None)
+    form_data.pop('params', None)
+
+    # FORCE memory-only features, native function calling, pinned tokens + usage,
+    # and title-generation-only background tasks.
+    form_data['features'] = tito.tito_features()
+    form_data['params'] = {'function_calling': 'native', 'max_tokens': tito.TITO_MAX_TOKENS}
+    form_data['stream_options'] = tito.tito_stream_options()
+    form_data['background_tasks'] = tito.lock_background_tasks({})
+
+
 @app.post('/api/chat/completions')
 @app.post('/api/v1/chat/completions')  # Experimental: Compatibility with OpenAI API
 async def chat_completion(
@@ -1115,6 +1148,7 @@ async def chat_completion(
     model_id = form_data.get('model', None)
     request.state.model_id = model_id
     model_item = form_data.pop('model_item', {})
+    apply_tito_lock(form_data, model_id, user)
     tasks = form_data.pop('background_tasks', None)
 
     from open_webui.utils.terminals import get_folder_terminal_defaults, initialize_terminal_directory
@@ -1316,6 +1350,9 @@ async def chat_completion(
             'client_ip': request.client.host if request.client else '',
             'internal': getattr(request.state, 'internal', False) is True,
             'chat_id': chat_id,
+            'tito_raw_system': (model_info.params.model_dump() or {}).get('system')
+            if model_id == tito.TITO_MODEL_ID and model_info
+            else None,
             'user_message': user_message,
             'user_message_id': user_message.get('id') if user_message else None,
             'assistant_message_id': form_data.pop('assistant_message_id', None),
