@@ -5,8 +5,8 @@ These tests FAIL today because ``open_webui.utils.tito`` does not exist yet
 exact contract in ``tito-spec/SPEC.md``.
 
 Every expected value names its SOURCE: an existing file:line when one exists,
-otherwise the locked plan / vet document that defines the value. No value is
-"because the spec says".
+otherwise the locked plan / vet document / Orc decision that defines the value.
+No value is "because the spec says".
 """
 
 import hashlib
@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 from open_webui.utils import tito
 
-# --- PATCH G: model gating -------------------------------------------------
+# --- PATCH G: model gating + locked config ---------------------------------
 
 
 def test_is_tito_model_true_for_id_tito():
@@ -36,17 +36,28 @@ def test_tito_features_forces_memory_only():
         assert features.get(key, False) is False
 
 
-def test_lock_background_tasks_strips_follow_up_and_tags_keeps_title():
-    # SOURCE: brief PATCH G — "follow_up/tags background tasks off (title on)".
-    # Task keys are TASKS enum (backend/open_webui/constants.py:143-145):
-    #   title_generation / follow_up_generation / tags_generation.
-    tasks = {
-        'title_generation': True,
-        'follow_up_generation': True,
-        'tags_generation': True,
-    }
-    locked = tito.lock_background_tasks(dict(tasks))
+def test_lock_background_tasks_wholesale_title_only():
+    # SOURCE: Orc O5 — "overwrite background_tasks wholesale {title_generation: true,
+    # everything else false}". Task keys are TASKS enum (constants.py:143-145).
+    locked = tito.lock_background_tasks(
+        {'title_generation': True, 'follow_up_generation': True, 'tags_generation': True}
+    )
     assert locked == {'title_generation': True}
+
+
+def test_lock_background_tasks_empty_input():
+    # SOURCE: Orc O5 — wholesale overwrite ignores whatever the client sent.
+    assert tito.lock_background_tasks({}) == {'title_generation': True}
+
+
+def test_tito_stream_options_include_usage():
+    # SOURCE: Orc O5 — "pin stream_options.include_usage=true" (vet H6 cost rows).
+    assert tito.tito_stream_options() == {'include_usage': True}
+
+
+def test_tito_max_tokens_pinned():
+    # SOURCE: Orc O5 — "pin params.max_tokens (16000)".
+    assert tito.TITO_MAX_TOKENS == 16000
 
 
 # --- PATCH A: memory snapshot (block 2) ------------------------------------
@@ -64,13 +75,11 @@ def test_build_memory_snapshot_sorted_plain_no_timestamps():
     snapshot = tito.build_memory_snapshot(memories)
 
     lines = snapshot.split('\n')
-    # sorted by (path or '', content or '', id or ''): no-path rows first ('' < any
-    # path), then by content code point ('mua...' < 'thích...' since 'm' < 't'),
-    # then the path row last. No timestamps anywhere.
-    assert lines[0] == '- mua xăng ở Fresno'  # no path, content 'm...'
-    assert lines[1] == '- thích Tuấn Ngọc'  # no path, content 't...'
-    assert lines[2] == '- sức khỏe: bảo hiểm 35 đô'  # has path -> sorts last
-    # invariant: no timestamps leak into the snapshot
+    # sorted by (path or '', content or '', id or ''): no-path rows first, then by
+    # content code point ('mua...' < 'thích...' since 'm' < 't'), then the path row.
+    assert lines[0] == '- mua xăng ở Fresno'
+    assert lines[1] == '- thích Tuấn Ngọc'
+    assert lines[2] == '- sức khỏe: bảo hiểm 35 đô'
     assert 'updated_at' not in snapshot and 'created_at' not in snapshot
 
 
@@ -86,54 +95,57 @@ def test_build_memory_snapshot_skips_empty_content():
         SimpleNamespace(id='a', path=None, content=''),
         SimpleNamespace(id='b', path=None, content='ok'),
     ]
-    snapshot = tito.build_memory_snapshot(memories)
-    assert snapshot == '- ok'
+    assert tito.build_memory_snapshot(memories) == '- ok'
 
 
-# --- PATCH A: frozen system (block1 + block2) ------------------------------
+# --- PATCH A: two frozen blocks (block1 + block2) --------------------------
 
 
-def test_build_tito_system_raw_prompt_untemplated():
+def test_build_tito_blocks_raw_prompt_untemplated():
     # SOURCE: brief PATCH A — "block1 raw Tito prompt ... no {{ }} templating".
-    raw = 'Bạn là Tito. Hãy hỏi {{USER_NAME}}?'  # literal braces must stay verbatim
-    system = tito.build_tito_system(raw, [SimpleNamespace(id='a', path=None, content='x')])
-    assert system.startswith(raw + '\n\n')
-    assert '{{USER_NAME}}' in system  # no substitution happened
+    # Orc O7 — block1 and block2 are returned/stored as TWO separate blocks.
+    raw = 'Bạn là Tito. Hãy hỏi {{USER_NAME}}?'
+    block1, block2 = tito.build_tito_blocks(raw, [SimpleNamespace(id='a', path=None, content='x')])
+    assert block1 == raw
+    assert '{{USER_NAME}}' in block1  # no substitution happened
+    assert tito.SNAPSHOT_HEADING in block2
+    assert '- x' in block2
 
 
-def test_build_tito_system_contains_heading_and_snapshot():
-    # SOURCE: heading string mandated by vet M5 (must NOT contain the volatile
-    # markers the pipe strips: `<memory_context>` — memory.py:17-18 — nor
-    # `User Context:`); snapshot content follows the heading.
-    raw = 'Tito prompt'
-    system = tito.build_tito_system(raw, [SimpleNamespace(id='a', path=None, content='mem')])
-    assert tito.SNAPSHOT_HEADING in system
-    assert '- mem' in system
-    # M5: heading must avoid the pipe's volatile markers.
+def test_build_tito_blocks_heading_avoids_volatile_markers():
+    # SOURCE: vet M5 — the heading must NOT contain the pipe's volatile markers
+    # `<memory_context>` (memory.py:17-18) nor `User Context:`.
     assert '<memory_context>' not in tito.SNAPSHOT_HEADING
     assert 'User Context:' not in tito.SNAPSHOT_HEADING
 
 
-def test_build_tito_system_unavailable_uses_unavailable_sentinel():
+def test_build_tito_blocks_unavailable_uses_unavailable_sentinel():
     # SOURCE: vet M6 — on exception write "(memory unavailable this chat)".
-    raw = 'Tito prompt'
-    system = tito.build_tito_system_unavailable(raw)
-    assert tito.MEMORY_UNAVAILABLE_SENTINEL in system
-    assert system.startswith(raw)
+    block1, block2 = tito.build_tito_blocks_unavailable('raw')
+    assert block1 == 'raw'
+    assert tito.MEMORY_UNAVAILABLE_SENTINEL in block2
 
 
-def test_freeze_and_get_frozen_system_roundtrip_with_sha256():
-    # SOURCE: DECISIONS — "meta.tito_system (+ sha256)".
-    system = 'prompt\n\nmemory'
-    meta = tito.freeze_tito_system({}, system)
-    assert meta['tito_system']['system'] == system
-    assert meta['tito_system']['sha256'] == hashlib.sha256(system.encode()).hexdigest()
-    assert tito.get_frozen_tito_system(meta) == system
+def test_freeze_stores_two_blocks_and_sha256():
+    # SOURCE: DECISIONS meta.tito_system + sha256; Orc O7 stores block1 AND block2.
+    meta = tito.freeze_tito_system({}, 'B1', 'B2')
+    assert meta['tito_system']['block1'] == 'B1'
+    assert meta['tito_system']['block2'] == 'B2'
+    assert meta['tito_system']['sha256'] == hashlib.sha256(b'B1\n\nB2').hexdigest()
 
 
-def test_get_frozen_tito_system_returns_none_when_absent():
+def test_get_frozen_returns_combined_and_blocks():
+    # SOURCE: Orc O7 — blocks stored separately (pipe breakpoint after block1);
+    # combined string is what the messages list carries.
+    meta = tito.freeze_tito_system({}, 'B1', 'B2')
+    assert tito.get_frozen_tito_system(meta) == 'B1\n\nB2'
+    assert tito.get_frozen_tito_blocks(meta) == ('B1', 'B2')
+
+
+def test_get_frozen_returns_none_when_absent():
     # SOURCE: DECISIONS — freeze only on the FIRST request; absent = first turn.
     assert tito.get_frozen_tito_system({}) is None
+    assert tito.get_frozen_tito_blocks({}) is None
 
 
 def test_sha256_hex_matches_stdlib():
@@ -155,18 +167,16 @@ def test_apply_frozen_system_drops_non_mid_conversation_system_and_prepends():
     ]
     out = tito.apply_frozen_system(messages, 'FROZEN')
     assert out[0] == {'role': 'system', 'content': 'FROZEN'}
-    # mid_conversation status survives, in place (after its user msg)
     assert {'role': 'system', 'content': 'status', 'mid_conversation': True} in out
-    # Conduit's index-0 system is gone
     assert not any(m.get('content') == 'conduit index-0 system' for m in out)
 
 
-# --- PATCH C: status in user message meta ----------------------------------
+# --- PATCH C: status marker (top-level) + storage in user meta ---------------
 
 
 def test_build_tito_status_message_is_marked_mid_conversation():
-    # SOURCE: brief PATCH C — "msgs marked mid_conversation pass through in place";
-    # marker key convention is `mid_conversation` (LOCKED plan LCR section).
+    # SOURCE: Orc C1 — marker is a TOP-LEVEL key: {"role":"system","content":...,
+    # "mid_conversation":true}.
     msg = tito.build_tito_status_message('time/location')
     assert msg['role'] == 'system'
     assert msg['content'] == 'time/location'
@@ -174,8 +184,8 @@ def test_build_tito_status_message_is_marked_mid_conversation():
 
 
 def test_store_tito_status_writes_user_meta():
-    # SOURCE: vet H2 — "Store the exact status string in the USER message's meta
-    # (e.g. meta.tito_status)"; meta survives replay via MESSAGE_REPLAY_KEYS
+    # SOURCE: Orc O4 / vet H2 — store the exact status string in the user
+    # message's meta (meta.tito_status); meta replays via MESSAGE_REPLAY_KEYS
     # (backend/open_webui/utils/middleware.py:1857).
     user_msg = {'role': 'user', 'content': 'chào', 'meta': {}}
     out = tito.store_tito_status(user_msg, 'status text')
@@ -183,24 +193,137 @@ def test_store_tito_status_writes_user_meta():
 
 
 def test_expand_tito_status_inserts_system_after_user_message():
-    # SOURCE: brief PATCH C — status is persisted in user msg meta and expanded
-    # into a mid_conversation system message right after that user message.
+    # SOURCE: Orc O4 — append the mid_conversation status right AFTER the user msg;
+    # expanded from meta.tito_status so replay is byte-identical.
     messages = [
         {'role': 'system', 'content': 'frozen'},
         {'role': 'user', 'content': 'chào', 'meta': {'tito_status': 'S'}},
         {'role': 'assistant', 'content': 'hi'},
     ]
     out = tito.expand_tito_status(messages)
-    # user msg (idx1) is followed by the mid_conversation status (idx2)
     assert out[1]['role'] == 'user'
     assert out[2] == {'role': 'system', 'content': 'S', 'mid_conversation': True}
     assert out[3]['role'] == 'assistant'
 
 
 def test_expand_tito_status_noop_without_status_meta():
-    # SOURCE: brief PATCH C — expansion only applies to user msgs that carry a status.
+    # SOURCE: Orc O4 — expansion only applies to user msgs that carry a status.
     messages = [
         {'role': 'user', 'content': 'chào'},
         {'role': 'assistant', 'content': 'hi'},
     ]
     assert tito.expand_tito_status(messages) == messages
+
+
+# --- PATCH C / O4: status builder ------------------------------------------
+
+
+def test_build_tito_status_all_vars():
+    # SOURCE: Orc O4 — "<context>\ntime: ...\nlocation: ...\n</context>" from
+    # CURRENT_DATETIME / CURRENT_TIMEZONE / USER_LOCATION.
+    s = tito.build_tito_status(
+        {'CURRENT_DATETIME': '2026-11-09', 'CURRENT_TIMEZONE': 'America/Los_Angeles', 'USER_LOCATION': 'Fresno'}
+    )
+    assert s == '<context>\ntime: 2026-11-09\ntimezone: America/Los_Angeles\nlocation: Fresno\n</context>'
+
+
+def test_build_tito_status_omits_missing_vars():
+    # SOURCE: Orc O4 — "missing → omit that line".
+    s = tito.build_tito_status({'CURRENT_DATETIME': '2026-11-09'})
+    assert s == '<context>\ntime: 2026-11-09\n</context>'
+    assert 'location' not in s and 'timezone' not in s
+
+
+def test_build_tito_status_budget_hook_empty_by_default():
+    # SOURCE: Orc O4 — budget/counters left as a hook arg, empty for now.
+    s = tito.build_tito_status({'CURRENT_DATETIME': 'd'})
+    assert 'budget' not in s
+
+
+# --- O3: temporary / missing chat guard ------------------------------------
+
+
+def test_tito_chat_error_temp_chat_blocked():
+    # SOURCE: Orc O3 — block temporary chats for tito (loud fail).
+    assert tito.tito_chat_error(None, 'temporary:abc') == tito.TITO_TEMP_CHAT_ERROR
+
+
+def test_tito_chat_error_missing_chat_not_new():
+    # SOURCE: Orc O3 — saved chat_id but no chat row on a follow-up → loud fail.
+    assert tito.tito_chat_error(None, 'saved-chat-id', is_new_chat=False) == tito.TITO_NO_CHAT_ERROR
+
+
+def test_tito_chat_error_ok_new_chat():
+    # SOURCE: Orc O3 — a brand-new saved chat legitimately has no row yet (freeze).
+    assert tito.tito_chat_error(None, 'saved-chat-id', is_new_chat=True) is None
+
+
+def test_tito_chat_error_ok_existing_chat():
+    # SOURCE: Orc O3 — an existing chat row passes.
+    assert tito.tito_chat_error(SimpleNamespace(id='saved-chat-id'), 'saved-chat-id', is_new_chat=False) is None
+
+
+# --- B5 / O6 / O8: self-check helpers --------------------------------------
+
+
+def test_tito_required_tool_names_has_memory_and_file():
+    # SOURCE: memory tools tools.py:816-827; file tools tools.py:750.
+    names = tito.tito_required_tool_names()
+    for n in ('search_memories', 'add_memory', 'view_file', 'display_file'):
+        assert n in names
+
+
+def test_tito_missing_tools_none_when_all_present():
+    # SOURCE: Orc O6 — self-check asserts expected names are present.
+    assert tito.tito_missing_tools(set(tito.tito_required_tool_names())) == []
+
+
+def test_tito_missing_tools_reports_missing():
+    # SOURCE: Orc O6 — missing names surface so the self-check can fail loudly.
+    missing = tito.tito_missing_tools({'add_memory'})
+    assert 'search_memories' in missing and 'view_file' in missing
+
+
+def test_tito_model_checks_ok_when_defaults():
+    # SOURCE: tools.py:647-648 get_model_capability defaults to True when absent.
+    assert tito.tito_model_checks({}) == []
+
+
+def test_tito_model_checks_flags_disabled_capabilities():
+    # SOURCE: Orc O6 — assert model capability memory + file_upload and
+    # is_builtin_tool_enabled('memory') (tools.py:652-654, 810).
+    model = {
+        'info': {
+            'meta': {
+                'capabilities': {'memory': False, 'file_upload': False},
+                'builtinTools': {'memory': False},
+            }
+        }
+    }
+    fails = tito.tito_model_checks(model)
+    assert len(fails) == 3
+    assert any('memory' in f for f in fails)
+    assert any('file_upload' in f for f in fails)
+
+
+def test_tito_config_checks_all_false_ok():
+    # SOURCE: Orc O8 — assert ENABLE_PERSISTENT_CONFIG=false,
+    # RAG_SYSTEM_CONTEXT=false, memories.system_context.enable=false.
+    config = {
+        'ENABLE_PERSISTENT_CONFIG': False,
+        'RAG_SYSTEM_CONTEXT': False,
+        'memories.system_context.enable': False,
+    }
+    assert tito.tito_config_checks(config) == []
+
+
+def test_tito_config_checks_flags_truthy():
+    # SOURCE: Orc O8 — any truthy value is a loud failure.
+    config = {
+        'ENABLE_PERSISTENT_CONFIG': True,
+        'RAG_SYSTEM_CONTEXT': False,
+        'memories.system_context.enable': False,
+    }
+    fails = tito.tito_config_checks(config)
+    assert len(fails) == 1
+    assert 'ENABLE_PERSISTENT_CONFIG' in fails[0]
