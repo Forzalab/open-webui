@@ -48,3 +48,9 @@ jobs:
           build-args: |
             BUILD_HASH=${{ github.sha }}
             BUILD_CHANNEL=${{ github.ref == 'refs/heads/dev' && 'dev' || (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && 'main' || 'unknown' }}
+
+      - name: Run Tito tests inside the built image
+        run: |
+          docker run --rm -v "$PWD/backend/open_webui/test/tito:/tito-tests:ro" \
+            --entrypoint bash ghcr.io/forzalab/open-webui:tito-${{ github.sha }} -c \
+            "pip install -q pytest pytest-asyncio && cd /app/backend && cp -r /tito-tests open_webui/test/tito_ci && python -m pytest open_webui/test/tito_ci -q -p no:cacheprovider"
