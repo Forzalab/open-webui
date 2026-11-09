@@ -33,6 +33,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
 
   calendar-mcp:
+    # Off until Apps Script calendar is set up: enable with `--profile calendar`.
+    profiles: ["calendar"]
     # TODO verify image tag + flags at deploy (image flavor, --allowed-host values,
     # healthcheck endpoint, and whether owui reaches this service by name/port).
     image: ghcr.io/sparfenyuk/mcp-proxy:${MCP_PROXY_TAG:-v0.12.0-debian-node}
