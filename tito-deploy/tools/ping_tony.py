@@ -82,7 +82,8 @@ def _post_discord_webhook(url: str, payload: dict) -> bool:
 
 class Tools:
     class Valves(BaseModel):
-        discord_webhook_url: str = os.getenv('TITO_DISCORD_WEBHOOK', '')
+        # Urgent channel for real pings; falls back to the general log webhook.
+        discord_webhook_url: str = os.getenv('TITO_URGENT_WEBHOOK', '') or os.getenv('TITO_DISCORD_WEBHOOK', '')
         admin_base_url: str = 'https://185-147-159-26.sslip.io'
         # Discord user id to @mention (notifies even in a muted channel). Set via valves, not in git.
         ping_user_id: str = os.getenv('TITO_DISCORD_PING_USER_ID', '')
