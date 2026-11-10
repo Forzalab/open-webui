@@ -30,6 +30,14 @@ def is_tito_model(model: dict) -> bool:
     return bool(model) and model.get('id') == TITO_MODEL_ID
 
 
+def tito_model_tool_ids(model: dict | None) -> list[str]:
+    """Tool ids attached to the Tito model row (meta.toolIds); [] if none."""
+    info = (model or {}).get('info') or {}
+    meta = info.get('meta') or (model or {}).get('meta') or {}
+    ids = meta.get('toolIds') or []
+    return [str(i) for i in ids if i]
+
+
 def tito_features() -> dict:
     return {'memory': True}
 

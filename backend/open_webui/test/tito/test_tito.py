@@ -449,3 +449,12 @@ def test_last_chat_gap_hours_floors_to_hours():
 def test_last_chat_gap_hours_never_negative():
     # SOURCE: brief TASK A — clock skew (candidate in the future) clamps to 0.
     assert tito.last_chat_gap_hours(7200, [100000]) == 0
+
+
+def test_tito_model_tool_ids_from_model_info_meta():
+    from open_webui.utils.tito import tito_model_tool_ids
+
+    model = {'id': 'tito', 'info': {'meta': {'toolIds': ['ping_tony']}}}
+    assert tito_model_tool_ids(model) == ['ping_tony']
+    assert tito_model_tool_ids({'id': 'tito'}) == []
+    assert tito_model_tool_ids(None) == []

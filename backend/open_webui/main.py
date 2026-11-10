@@ -1181,7 +1181,7 @@ async def _set_direct_model(request: Request, model_item: dict, user) -> None:
     request.state.model = model_item
 
 
-def apply_tito_lock(form_data: dict, model_id, user) -> None:
+def apply_tito_lock(form_data: dict, model_id, user, model: dict | None = None) -> None:
     """Force the server-side Tito configuration, ignoring client UI state."""
     if model_id != tito.TITO_MODEL_ID:
         return
@@ -1199,6 +1199,10 @@ def apply_tito_lock(form_data: dict, model_id, user) -> None:
     form_data['params'] = {'function_calling': 'native', 'max_tokens': tito.TITO_MAX_TOKENS}
     form_data['stream_options'] = tito.tito_stream_options()
     form_data['background_tasks'] = tito.lock_background_tasks({})
+    # Tito's tools come ONLY from its own model config (meta.toolIds), never the client.
+    tool_ids = tito.tito_model_tool_ids(model)
+    if tool_ids:
+        form_data['tool_ids'] = tool_ids
 
 
 @app.post('/api/chat/completions')
@@ -1214,7 +1218,7 @@ async def chat_completion(
     model_id = form_data.get('model', None)
     request.state.model_id = model_id
     model_item = form_data.pop('model_item', {})
-    apply_tito_lock(form_data, model_id, user)
+    apply_tito_lock(form_data, model_id, user, request.app.state.MODELS.get(model_id))
     tasks = form_data.pop('background_tasks', None)
 
     from open_webui.utils.terminals import get_folder_terminal_defaults, initialize_terminal_directory
