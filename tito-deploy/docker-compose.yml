@@ -2,7 +2,7 @@ services:
   owui:
     image: ghcr.io/forzalab/open-webui:${TITO_IMAGE_TAG:-tito}
     restart: unless-stopped
-    mem_limit: 2500m
+    mem_limit: 4g
     expose:
       - "8080"
     # TODO(B4): re-add depends_on calendar-mcp service_healthy once Apps Script is deployed.
@@ -12,7 +12,7 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       WEBUI_URL: https://${TITO_DOMAIN}
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY}
-      ENABLE_OAUTH_SIGNUP: "true"
+      ENABLE_OAUTH_SIGNUP: "false"
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       ENABLE_LOGIN_FORM: "false"
@@ -32,6 +32,109 @@ services:
       TITO_SOFT_CAP_USD: "15"
       TITO_HARD_CAP_USD: "22"
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # --- Tito settings sweep (2026-11-10) ---
+      WEBUI_NAME: "Tito"
+      DEFAULT_PROMPT_SUGGESTIONS: "[]"
+      PENDING_USER_OVERLAY_TITLE: "Đang chờ duyệt"
+      PENDING_USER_OVERLAY_CONTENT: "Tài khoản này chưa được cho phép. Xin liên hệ Tony."
+      OAUTH_MERGE_ACCOUNTS_BY_EMAIL: "true"
+      DEFAULT_USER_ROLE: "pending"
+      ENABLE_PASSWORD_AUTH: "false"
+      ENABLE_PASSWORD_CHANGE_FORM: "false"
+      WEBUI_AUTH_COOKIE_SECURE: "true"
+      WEBUI_SESSION_COOKIE_SECURE: "true"
+      WEBUI_SESSION_COOKIE_SAME_SITE: "lax"
+      CORS_ALLOW_ORIGIN: "https://${TITO_DOMAIN};https://${TITO_ALT_DOMAIN:-titodori.duckdns.org}"
+      JWT_EXPIRES_IN: "26w"
+      ENABLE_ADMIN_EXPORT: "false"
+      ENABLE_PUBLIC_ACTIVE_USERS_COUNT: "false"
+      ENABLE_EASTER_EGGS: "false"
+      UVICORN_WORKERS: "1"
+      WEBHOOK_URL: ${TITO_DISCORD_WEBHOOK}
+      ENABLE_OLLAMA_API: "false"
+      ENABLE_OPENAI_API: "false"
+      ENABLE_DIRECT_CONNECTIONS: "false"
+      ENABLE_DIRECT_INTEGRATIONS: "false"
+      ENABLE_WEB_SEARCH: "false"
+      ENABLE_IMAGE_GENERATION: "false"
+      ENABLE_IMAGE_EDIT: "false"
+      ENABLE_IMAGE_PROMPT_GENERATION: "false"
+      ENABLE_CODE_EXECUTION: "false"
+      ENABLE_CODE_INTERPRETER: "false"
+      ENABLE_EVALUATION_ARENA_MODELS: "false"
+      ENABLE_COMMUNITY_SHARING: "false"
+      ENABLE_MESSAGE_RATING: "false"
+      ENABLE_USER_STATUS: "false"
+      ENABLE_USER_WEBHOOKS: "false"
+      ENABLE_FOLDERS: "false"
+      ENABLE_NOTES: "false"
+      ENABLE_CHANNELS: "false"
+      ENABLE_CALENDAR: "false"
+      ENABLE_AUTOMATIONS: "false"
+      ENABLE_SUBAGENTS: "false"
+      ENABLE_CONTEXT_COMPACTION: "false"
+      ENABLE_TOOL_SEARCH: "false"
+      ENABLE_VOICE_MODE_PROMPT: "false"
+      DEFAULT_MODELS: "tito"
+      DEFAULT_PINNED_MODELS: "tito"
+      MODEL_ORDER_LIST: '["tito"]'
+      DEFAULT_MODEL_PARAMS: '{"function_calling":"native","max_tokens":16000}'
+      DEFAULT_MODEL_METADATA: '{"capabilities":{"file_context":false,"web_search":false,"image_generation":false,"code_interpreter":false,"usage":true,"memory":true},"builtinTools":{"memory":true,"files":true,"time":false,"user_input":false,"chats":false,"notes":false,"knowledge":false,"channels":false,"notifications":false,"web_search":false,"image_generation":false,"code_interpreter":false,"tasks":false,"automations":false,"calendar":false,"subagents":false,"skills":false,"tools":false}}'
+      ENABLE_TITLE_GENERATION: "true"
+      TASK_MODEL_EXTERNAL: "anthropic.anthropic/claude-haiku-5-5"
+      ENABLE_MEMORIES: "true"
+      ENABLE_MEMORY_SYSTEM_CONTEXT: "false"
+      ENABLE_MEMORY_BACKGROUND_REVIEW: "false"
+      BYPASS_EMBEDDING_AND_RETRIEVAL: "true"
+      RAG_FILE_MAX_SIZE: "20"
+      RAG_FILE_MAX_COUNT: "5"
+      UI_VISIBILITY: '{"chat.selected_tools":false,"chat.selected_skills":false,"chat.selected_filters":false,"chat.selected_web_search":false,"chat.selected_image_generation":false,"chat.selected_code_interpreter":false,"chat.attach_webpage":false,"chat.attach_notes":false,"chat.attach_knowledge":false,"chat.reference_chats":false,"chat.capture":false,"chat.compare":false,"chat.model_command":false,"chat.settings_command":false,"chat.status":false,"chat.usage":false,"chat.merge":false,"chat.fork":false,"chat.tags":false,"chat.artifacts":false,"chat.code_preview":false,"models.set_default":false,"models.pin":false}'
+      DEFAULT_INTERFACE_SETTINGS: '{"autoTags":false,"autoFollowUps":false,"showUpdateToast":false,"showChangelog":false,"temporaryChatByDefault":false,"notificationEnabled":false,"userLocation":true,"textScale":1.2}'
+      USER_PERMISSIONS_WORKSPACE_MODELS_ACCESS: "false"
+      USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS: "false"
+      USER_PERMISSIONS_WORKSPACE_PROMPTS_ACCESS: "false"
+      USER_PERMISSIONS_WORKSPACE_TOOLS_ACCESS: "false"
+      USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS: "false"
+      USER_PERMISSIONS_ACCESS_GRANTS_ALLOW_USERS: "false"
+      USER_PERMISSIONS_ACCESS_GRANTS_ALLOW_GROUPS: "false"
+      USER_PERMISSIONS_CHAT_CONTROLS: "false"
+      USER_PERMISSIONS_CHAT_VALVES: "false"
+      USER_PERMISSIONS_CHAT_SYSTEM_PROMPT: "false"
+      USER_PERMISSIONS_CHAT_PARAMS: "false"
+      USER_PERMISSIONS_CHAT_WEB_UPLOAD: "false"
+      USER_PERMISSIONS_CHAT_DELETE_MESSAGE: "false"
+      USER_PERMISSIONS_CHAT_CONTINUE_RESPONSE: "false"
+      USER_PERMISSIONS_CHAT_RATE_RESPONSE: "false"
+      USER_PERMISSIONS_CHAT_EDIT: "false"
+      USER_PERMISSIONS_CHAT_SHARE: "false"
+      USER_PERMISSIONS_CHAT_ALLOW_PUBLIC_SHARING: "false"
+      USER_PERMISSIONS_CHAT_ALLOW_OPEN_SHARING: "false"
+      USER_PERMISSIONS_CHAT_EXPORT: "false"
+      USER_PERMISSIONS_CHAT_IMPORT: "false"
+      USER_PERMISSIONS_CHAT_STT: "false"
+      USER_PERMISSIONS_CHAT_TTS: "false"
+      USER_PERMISSIONS_CHAT_CALL: "false"
+      USER_PERMISSIONS_CHAT_MULTIPLE_MODELS: "false"
+      USER_PERMISSIONS_CHAT_TEMPORARY: "false"
+      USER_PERMISSIONS_CHAT_TEMPORARY_ENFORCED: "false"
+      USER_PERMISSIONS_CHAT_SIDE_CHAT: "false"
+      USER_PERMISSIONS_FEATURES_API_KEYS: "false"
+      USER_PERMISSIONS_FEATURES_NOTES: "false"
+      USER_PERMISSIONS_FEATURES_FOLDERS: "false"
+      USER_PERMISSIONS_FEATURES_CHANNELS: "false"
+      USER_PERMISSIONS_FEATURES_ENCRYPTED_CHANNELS: "false"
+      USER_PERMISSIONS_FEATURES_DIRECT_TOOL_SERVERS: "false"
+      USER_PERMISSIONS_FEATURES_WEB_SEARCH: "false"
+      USER_PERMISSIONS_FEATURES_IMAGE_GENERATION: "false"
+      USER_PERMISSIONS_FEATURES_CODE_INTERPRETER: "false"
+      USER_PERMISSIONS_FEATURES_AUTOMATIONS: "false"
+      USER_PERMISSIONS_FEATURES_CALENDAR: "false"
+      USER_PERMISSIONS_FEATURES_USER_WEBHOOKS: "false"
+      USER_PERMISSIONS_SETTINGS_INTERFACE: "false"
+      USER_PERMISSIONS_CHAT_FILE_UPLOAD: "true"
+      USER_PERMISSIONS_CHAT_DELETE: "true"
+      USER_PERMISSIONS_CHAT_REGENERATE_RESPONSE: "true"
+      USER_PERMISSIONS_FEATURES_MEMORIES: "true"
 
   calendar-mcp:
     # Off until Apps Script calendar is set up: enable with `--profile calendar`.
