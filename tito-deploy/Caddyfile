@@ -1,4 +1,5 @@
 # Reverse proxy to owui. Caddy forwards websocket upgrades automatically.
-{$TITO_DOMAIN} {
+# TITO_DOMAIN = OAuth/login host; TITO_ALT_DOMAIN = extra host (API key access).
+{$TITO_DOMAIN}, {$TITO_ALT_DOMAIN} {
 	reverse_proxy owui:8080
 }

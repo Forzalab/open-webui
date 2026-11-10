@@ -60,6 +60,7 @@ services:
       - "443:443"
     environment:
       TITO_DOMAIN: ${TITO_DOMAIN}
+      TITO_ALT_DOMAIN: ${TITO_ALT_DOMAIN:-titodori.duckdns.org}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
