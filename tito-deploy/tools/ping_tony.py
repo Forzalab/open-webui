@@ -84,6 +84,8 @@ class Tools:
     class Valves(BaseModel):
         discord_webhook_url: str = os.getenv('TITO_DISCORD_WEBHOOK', '')
         admin_base_url: str = 'https://185-147-159-26.sslip.io'
+        # Discord user id to @mention (notifies even in a muted channel). Set via valves, not in git.
+        ping_user_id: str = os.getenv('TITO_DISCORD_PING_USER_ID', '')
 
     def __init__(self):
         self.valves = self.Valves()
@@ -134,9 +136,14 @@ class Tools:
         if link:
             lines.append(f'Link chat: {link}')
 
+        uid = ''.join(ch for ch in (self.valves.ping_user_id or '') if ch.isdigit())
+        if uid:
+            lines.insert(0, f'<@{uid}> 🚨 Tito cần Tùng')
         payload = {
             'content': '\n'.join(lines),
             'username': 'Ping Tung',
+            # Only Tùng can be pinged; nothing in the chat text can @everyone.
+            'allowed_mentions': {'parse': [], 'users': [uid] if uid else []},
         }
 
         detail = 'non-2xx'
