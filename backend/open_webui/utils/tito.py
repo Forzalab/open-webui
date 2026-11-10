@@ -114,7 +114,20 @@ def apply_frozen_system(messages: list[dict], frozen_system: str) -> list[dict]:
     return [{'role': 'system', 'content': frozen_system}, *kept]
 
 
-def build_tito_status(variables: dict, budget_counters=None) -> str:
+def last_chat_gap_hours(now_epoch: int, candidates: list[int | None]) -> int | None:
+    """Floor the elapsed hours since the newest candidate, or ``None`` with no candidate.
+
+    Ignores ``None`` and ``0`` entries (no prior activity), takes the ``max`` of the
+    rest, floors to whole hours, and never returns a negative value.
+    """
+    valid = [c for c in (candidates or []) if isinstance(c, int) and c > 0]
+    if not valid:
+        return None
+    gap = max(0, int(now_epoch) - max(valid))
+    return gap // 3600
+
+
+def build_tito_status(variables: dict, budget_counters=None, last_chat_gap_hours=None) -> str:
     variables = variables or {}
     lines = ['<context>']
     if variables.get('CURRENT_DATETIME'):
@@ -123,6 +136,8 @@ def build_tito_status(variables: dict, budget_counters=None) -> str:
         lines.append(f'timezone: {variables["CURRENT_TIMEZONE"]}')
     if variables.get('USER_LOCATION'):
         lines.append(f'location: {variables["USER_LOCATION"]}')
+    if last_chat_gap_hours is not None:
+        lines.append(f'last_chat: {last_chat_gap_hours}h ago')
     lines.append('</context>')
     return '\n'.join(lines)
 

@@ -403,3 +403,49 @@ def test_tito_notify_logs_no_webhook_url(monkeypatch, caplog):
     with caplog.at_level(logging.DEBUG):
         asyncio.run(middleware._tito_notify('x'))
     assert 'SECRETTOKEN' not in caplog.text
+
+
+# --- TASK A: last-chat gap in the hidden status ------------------------------
+
+
+def test_build_tito_status_adds_last_chat_line_before_closing_tag():
+    # SOURCE: brief TASK A — a non-None last_chat_gap_hours adds `last_chat: <N>h ago`
+    # right before '</context>'; integer hours, floor, 0 allowed.
+    s = tito.build_tito_status({'CURRENT_DATETIME': '2026-11-09', 'USER_LOCATION': 'Fresno'}, last_chat_gap_hours=3)
+    assert s == '<context>\ntime: 2026-11-09\nlocation: Fresno\nlast_chat: 3h ago\n</context>'
+
+
+def test_build_tito_status_last_chat_zero_hours_allowed():
+    # SOURCE: brief TASK A — 0 is a valid floor (gap under one hour).
+    s = tito.build_tito_status({}, last_chat_gap_hours=0)
+    assert s == '<context>\nlast_chat: 0h ago\n</context>'
+
+
+def test_build_tito_status_last_chat_absent_when_none():
+    # SOURCE: brief TASK A — output stays byte-identical to the pre-gap build when None.
+    s = tito.build_tito_status({'CURRENT_DATETIME': 'd'}, last_chat_gap_hours=None)
+    assert 'last_chat' not in s
+    assert s == tito.build_tito_status({'CURRENT_DATETIME': 'd'})
+
+
+def test_last_chat_gap_hours_none_when_no_candidates():
+    # SOURCE: brief TASK A — no previous activity at all -> None.
+    assert tito.last_chat_gap_hours(1000000, [None, 0, None]) is None
+    assert tito.last_chat_gap_hours(1000000, []) is None
+
+
+def test_last_chat_gap_hours_ignores_none_and_zero_uses_max():
+    # SOURCE: brief TASK A — ignores None/0, uses max of the rest.
+    # now=7200; candidates 0, None, 3600 -> max 3600 -> gap 3600 -> 1 hour.
+    assert tito.last_chat_gap_hours(7200, [0, None, 3600]) == 1
+
+
+def test_last_chat_gap_hours_floors_to_hours():
+    # SOURCE: brief TASK A — floors to integer hours.
+    # gap = 7199 seconds -> floor 1 hour.
+    assert tito.last_chat_gap_hours(7200, [1]) == 1
+
+
+def test_last_chat_gap_hours_never_negative():
+    # SOURCE: brief TASK A — clock skew (candidate in the future) clamps to 0.
+    assert tito.last_chat_gap_hours(7200, [100000]) == 0

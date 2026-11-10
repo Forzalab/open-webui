@@ -203,6 +203,45 @@ async def _tito_notify(message: str, event_data: dict | None = None) -> None:
         log.debug('Tito Discord notification failed (%s)', type(e).__name__)
 
 
+async def _tito_last_chat_gap_hours(chat_id: str, user_message_id: str | None, user_id: str) -> int | None:
+    """Compute the last-chat gap in whole hours for the Tito status.
+
+    Uses the newest of (a) the previous user message in this chat and (b) the
+    newest ``updated_at`` of the user's OTHER chats, both read BEFORE this turn is
+    persisted. Returns ``None`` on no prior activity or on any error (never breaks
+    a request); the debug log carries no message content.
+    """
+    try:
+        now = int(time.time())
+        candidates: list[int] = []
+
+        # (a) previous user message in this chat (the user message before the newest one).
+        messages_map = await Chats.get_messages_map_by_chat_id(chat_id)
+        if messages_map:
+            for message in messages_map.values():
+                if not isinstance(message, dict) or message.get('role') != 'user':
+                    continue
+                if user_message_id and message.get('id') == user_message_id:
+                    continue
+                timestamp = message.get('timestamp')
+                if isinstance(timestamp, int) and timestamp > 0:
+                    candidates.append(timestamp)
+
+        # (b) newest updated_at of the user's OTHER chats.
+        chat_list = await Chats.get_chats_by_user_id(user_id)
+        for other in (chat_list.items if chat_list else []):
+            if getattr(other, 'id', None) == chat_id:
+                continue
+            updated_at = getattr(other, 'updated_at', None)
+            if isinstance(updated_at, int) and updated_at > 0:
+                candidates.append(updated_at)
+
+        return tito.last_chat_gap_hours(now, candidates)
+    except Exception:
+        log.debug('Tito last-chat gap unavailable')
+        return None
+
+
 def _is_tool_result_error(value: Any) -> bool:
     if isinstance(value, str):
         text = value.strip().lower()
@@ -3061,7 +3100,10 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         frozen = tito.join_tito_system(tito_system['block1'], tito_system['block2'])
         form_data['messages'] = tito.apply_frozen_system(form_data['messages'], frozen)
 
-        status_text = tito.build_tito_status(metadata.get('variables', {}))
+        status_text = tito.build_tito_status(
+            metadata.get('variables', {}),
+            last_chat_gap_hours=await _tito_last_chat_gap_hours(chat_id, user_message_id, user.id),
+        )
         form_data['messages'], status_to_persist = tito.ensure_tito_status(form_data['messages'], status_text)
         if status_to_persist and is_saved_chat_id(chat_id) and user_message_id:
             stored_user_message = await Chats.get_message_by_id_and_message_id(chat_id, user_message_id) or {}
