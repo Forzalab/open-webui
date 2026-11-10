@@ -294,7 +294,7 @@ from open_webui.utils.tool_approval import (
     build_tool_approval_resume_payload,
     resolve_tool_call_output,
 )
-from open_webui.utils.tools import get_builtin_tools, set_terminal_servers, set_tool_servers
+from open_webui.utils.tools import get_builtin_tools, get_tools, set_terminal_servers, set_tool_servers
 
 if SAFE_MODE:
     print('SAFE MODE ENABLED')
@@ -536,8 +536,13 @@ async def lifespan(app: FastAPI):
     if not tito_selfcheck_user:
         log.warning('TITO_SELFCHECK_USER_ID unset; skipping Tito self-check')
     else:
-        tito_model = app.state.MODELS.get(tito.TITO_MODEL_ID)
         tito_user = await Users.get_user_by_id(tito_selfcheck_user)
+        if tito_user and not app.state.MODELS:
+            try:
+                await get_all_models(request, user=tito_user)
+            except Exception:
+                log.exception('Tito self-check model prefetch failed')
+        tito_model = app.state.MODELS.get(tito.TITO_MODEL_ID)
         if not tito_model or not tito_user or tito_user.role == 'admin':
             log.error('Tito self-check failed: model or non-admin user unavailable')
             await _tito_notify('Tito self-check failed: model or non-admin user unavailable', {})
@@ -573,6 +578,26 @@ async def lifespan(app: FastAPI):
             except Exception:
                 log.exception('Tito self-check get_builtin_tools failed')
                 failures.append('get_builtin_tools raised')
+            tool_ids = ((tito_model.get('info') or {}).get('meta') or {}).get('toolIds') or []
+            user_tools = {}
+            if tool_ids:
+                try:
+                    user_tools = await get_tools(
+                        request,
+                        tool_ids,
+                        tito_user,
+                        {
+                            '__user__': tito_user.model_dump(),
+                            '__model__': tito_model,
+                            '__messages__': [], '__files__': [], '__metadata__': {'session_id': 'tito-selfcheck'},
+                        },
+                    )
+                except Exception:
+                    log.exception('Tito self-check get_tools failed')
+                    failures.append('get_tools raised')
+                if not user_tools:
+                    failures.append('user tools empty')
+            tools = {**user_tools, **tools}
             failures.extend(tito.tito_missing_tools(set(tools)))
 
             if failures:
