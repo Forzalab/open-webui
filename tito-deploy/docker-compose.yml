@@ -29,6 +29,8 @@ services:
       ENABLE_RETRIEVAL_QUERY_GENERATION: "false"
       TITO_DISCORD_WEBHOOK: ${TITO_DISCORD_WEBHOOK}
       TITO_TOOLS_FILE: /app/backend/data/tito-tools.json
+      # Startup self-check runs as this non-admin user (Dad); unset = self-check skipped.
+      TITO_SELFCHECK_USER_ID: ${TITO_SELFCHECK_USER_ID:-2ce35e4f-e74d-4590-b55f-52e386fcafde}
       TITO_SOFT_CAP_USD: "15"
       TITO_HARD_CAP_USD: "22"
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
