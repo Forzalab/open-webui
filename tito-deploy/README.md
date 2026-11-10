@@ -19,6 +19,7 @@ Update = rerun the one-liner (fetches the pinned ref and rebuilds).
 The image is built by GitHub Actions; the ghcr package must be PUBLIC (or `docker login` on the box).
 
 ## Fast deploy
+
 - Push to `tito` → thin image (~1-2 min): `Dockerfile.tito` = `tito-base` + our backend.
 - After an upstream sync (or first time): run "Build and publish Tito image" with `base` = true.
 - Tests are opt-in: put `[test]` in the commit message, or run the workflow with `test` = true.

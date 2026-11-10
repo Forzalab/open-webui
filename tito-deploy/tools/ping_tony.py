@@ -27,13 +27,15 @@ _LAST_PING: dict[str, float] = {}
 SUCCESS = 'Đã nhắn Tùng.'
 RATE_LIMITED = 'Đã nhắn Tùng rồi, đang chờ.'
 ERROR = 'Chưa nhắn được Tùng (mã {code}).'
-USER_AGENT = 'TitoBot (https://titodori.duckdns.org, 1.0)'  # Cloudflare blocks the default Python-urllib UA (403, error 1010)
+USER_AGENT = (
+    'TitoBot (https://titodori.duckdns.org, 1.0)'  # Cloudflare blocks the default Python-urllib UA (403, error 1010)
+)
 log = logging.getLogger(__name__)
 
 
 def _incident(detail: str) -> str:
     """Log one TITO-ERR line and return its code (no URLs or tokens in detail)."""
-    code = f"T{datetime.now(ZoneInfo('America/Los_Angeles')):%H%M}-{secrets.token_hex(2)}"
+    code = f'T{datetime.now(ZoneInfo("America/Los_Angeles")):%H%M}-{secrets.token_hex(2)}'
     log.error('TITO-ERR %s ping_tony %s', code, detail)
     return code
 

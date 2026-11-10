@@ -589,7 +589,9 @@ async def lifespan(app: FastAPI):
                         {
                             '__user__': tito_user.model_dump(),
                             '__model__': tito_model,
-                            '__messages__': [], '__files__': [], '__metadata__': {'session_id': 'tito-selfcheck'},
+                            '__messages__': [],
+                            '__files__': [],
+                            '__metadata__': {'session_id': 'tito-selfcheck'},
                         },
                     )
                 except Exception:
