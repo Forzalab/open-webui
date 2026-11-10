@@ -1,5 +1,17 @@
 # Reverse proxy to owui. Caddy forwards websocket upgrades automatically.
-# TITO_DOMAIN = OAuth/login host; TITO_ALT_DOMAIN = extra host (API key access).
-{$TITO_DOMAIN}, {$TITO_ALT_DOMAIN} {
+# TITO_DOMAIN = OAuth/login host (sslip); TITO_ALT_DOMAIN = API key host (duckdns).
+{$TITO_DOMAIN} {
 	reverse_proxy owui:8080
+}
+
+# duckdns: API + websocket only. Browsers go to the login host, so OAuth
+# cookies and the Google redirect URI live on one host.
+{$TITO_ALT_DOMAIN} {
+	@api path /api/* /ollama/* /openai/* /ws/*
+	handle @api {
+		reverse_proxy owui:8080
+	}
+	handle {
+		redir https://{$TITO_DOMAIN}{uri} 302
+	}
 }
