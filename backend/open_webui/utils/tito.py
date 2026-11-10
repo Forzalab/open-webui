@@ -137,7 +137,7 @@ def build_tito_status(variables: dict, budget_counters=None, last_chat_gap_hours
     if variables.get('USER_LOCATION'):
         lines.append(f'location: {variables["USER_LOCATION"]}')
     if last_chat_gap_hours is not None:
-        lines.append(f'last_chat: {last_chat_gap_hours}h ago')
+        lines.append(f'last chat: {last_chat_gap_hours}h ago')
     lines.append('</context>')
     return '\n'.join(lines)
 

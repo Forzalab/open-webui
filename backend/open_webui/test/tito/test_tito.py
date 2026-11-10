@@ -409,16 +409,16 @@ def test_tito_notify_logs_no_webhook_url(monkeypatch, caplog):
 
 
 def test_build_tito_status_adds_last_chat_line_before_closing_tag():
-    # SOURCE: brief TASK A — a non-None last_chat_gap_hours adds `last_chat: <N>h ago`
+    # SOURCE: brief TASK A — a non-None last_chat_gap_hours adds `last chat: <N>h ago`
     # right before '</context>'; integer hours, floor, 0 allowed.
     s = tito.build_tito_status({'CURRENT_DATETIME': '2026-11-09', 'USER_LOCATION': 'Fresno'}, last_chat_gap_hours=3)
-    assert s == '<context>\ntime: 2026-11-09\nlocation: Fresno\nlast_chat: 3h ago\n</context>'
+    assert s == '<context>\ntime: 2026-11-09\nlocation: Fresno\nlast chat: 3h ago\n</context>'
 
 
 def test_build_tito_status_last_chat_zero_hours_allowed():
     # SOURCE: brief TASK A — 0 is a valid floor (gap under one hour).
     s = tito.build_tito_status({}, last_chat_gap_hours=0)
-    assert s == '<context>\nlast_chat: 0h ago\n</context>'
+    assert s == '<context>\nlast chat: 0h ago\n</context>'
 
 
 def test_build_tito_status_last_chat_absent_when_none():
