@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# rc: keep `claude remote-control` alive in a detached tmux session named "rc". No params.
+# Install once (as tito):
+#   curl -fsSL https://raw.githubusercontent.com/Forzalab/open-webui/tito/tito-deploy/rc -o ~/.local/bin/rc && chmod +x ~/.local/bin/rc && (crontab -l 2>/dev/null | grep -v '/rc$'; echo '@reboot $HOME/.local/bin/rc') | crontab - && rc
+# One-time before that: `cd /opt/tito && claude` once, accept the trust prompt + log in, then /exit.
+# Why tmux: remote-control needs a real terminal; cron/nohup give none, so it exits at once.
+export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+if tmux has-session -t rc 2>/dev/null; then
+  echo "rc: already running (tmux attach -t rc to look, Ctrl+B then D to leave)"
+  exit 0
+fi
+tmux new-session -d -s rc "cd /opt/tito && while true; do claude remote-control; echo 'rc: exited, restarting in 10s'; sleep 10; done"
+echo "rc: started (tmux attach -t rc to look, Ctrl+B then D to leave)"
