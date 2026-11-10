@@ -229,7 +229,7 @@ async def _tito_last_chat_gap_hours(chat_id: str, user_message_id: str | None, u
 
         # (b) newest updated_at of the user's OTHER chats.
         chat_list = await Chats.get_chats_by_user_id(user_id)
-        for other in (chat_list.items if chat_list else []):
+        for other in chat_list.items if chat_list else []:
             if getattr(other, 'id', None) == chat_id:
                 continue
             updated_at = getattr(other, 'updated_at', None)
