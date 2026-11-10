@@ -731,13 +731,14 @@ def merge_system_messages(messages: list[dict]) -> list[dict]:
     Some chat templates (e.g. Qwen) require exactly one system
     message at the start.  Multiple pipeline stages may each
     insert their own system message; this function consolidates
-    them.
+    them.  System messages with a truthy top-level ``mid_conversation``
+    key are exempt and stay in place.
     """
     system_contents: list[str] = []
     other_messages: list[dict] = []
 
     for message in messages:
-        if message.get('role') == 'system':
+        if message.get('role') == 'system' and not message.get('mid_conversation'):
             content = get_content_from_message(message)
             if content:
                 system_contents.append(content)

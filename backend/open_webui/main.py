@@ -52,6 +52,7 @@ from open_webui.config import (
     ENABLE_ADMIN_EXPORT,
     ENABLE_ONEDRIVE_BUSINESS,
     ENABLE_ONEDRIVE_PERSONAL,
+    ENABLE_PERSISTENT_CONFIG,
     # OpenAI
     ENV,
     FRONTEND_BUILD_DIR,
@@ -107,6 +108,7 @@ from open_webui.env import (
     LOG_FORMAT,
     MAX_BODY_LOG_SIZE,
     # Redis
+    RAG_SYSTEM_CONTEXT,
     REDIS_KEY_PREFIX,
     REDIS_TASK_TTL,
     REDIS_URL,
@@ -269,6 +271,8 @@ from open_webui.utils.models import (
     get_filtered_models,
 )
 from open_webui.utils.payload import apply_model_controls
+from open_webui.utils import tito
+from open_webui.utils.webhook import post_webhook
 from open_webui.utils.oauth import (
     OAuthClientInformationFull,
     OAuthClientManager,
@@ -290,7 +294,7 @@ from open_webui.utils.tool_approval import (
     build_tool_approval_resume_payload,
     resolve_tool_call_output,
 )
-from open_webui.utils.tools import set_terminal_servers, set_tool_servers
+from open_webui.utils.tools import get_builtin_tools, get_tools, set_terminal_servers, set_tool_servers
 
 if SAFE_MODE:
     print('SAFE MODE ENABLED')
@@ -298,6 +302,17 @@ if SAFE_MODE:
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
+
+
+async def _tito_notify(message: str, event_data: dict | None = None) -> None:
+    """Best-effort Discord alert for Tito (env-gated, never raises)."""
+    url = os.getenv('TITO_DISCORD_WEBHOOK', '')
+    if not url:
+        return
+    try:
+        await post_webhook('open-webui', url, message, event_data or {})
+    except Exception:
+        log.debug('Tito Discord notification failed', exc_info=True)
 
 
 async def emit_chat_list_event(metadata: dict, chat_id: str):
@@ -515,6 +530,99 @@ async def lifespan(app: FastAPI):
             log.warning('License data retrieval is still pending; continuing startup without it')
         except Exception as e:
             log.warning(f'License data retrieval failed during startup: {e}')
+
+    # B5: Tito self-check — the frozen tool list must be attainable for a NON-admin user.
+    tito_selfcheck_user = os.getenv('TITO_SELFCHECK_USER_ID', '')
+    if not tito_selfcheck_user:
+        log.warning('TITO_SELFCHECK_USER_ID unset; skipping Tito self-check')
+    else:
+        tito_user = await Users.get_user_by_id(tito_selfcheck_user)
+        if tito_user and not app.state.MODELS:
+            try:
+                await get_all_models(request, user=tito_user)
+            except Exception:
+                log.exception('Tito self-check model prefetch failed')
+        tito_model = app.state.MODELS.get(tito.TITO_MODEL_ID)
+        if not tito_model or not tito_user or tito_user.role == 'admin':
+            log.error('Tito self-check failed: model or non-admin user unavailable')
+            await _tito_notify('Tito self-check failed: model or non-admin user unavailable', {})
+        else:
+            failures = tito.tito_model_checks(tito_model)
+            if not await Config.get('memories.enable'):
+                failures.append('memories.enable disabled')
+            failures.extend(
+                tito.tito_config_checks(
+                    {
+                        'ENABLE_PERSISTENT_CONFIG': ENABLE_PERSISTENT_CONFIG,
+                        'RAG_SYSTEM_CONTEXT': RAG_SYSTEM_CONTEXT,
+                        'memories.system_context.enable': await Config.get('memories.system_context.enable', False),
+                    }
+                )
+            )
+            tools = {}
+            try:
+                tools = await get_builtin_tools(
+                    request,
+                    {
+                        '__user__': tito_user.model_dump(),
+                        '__metadata__': {
+                            'files': [{'type': 'file', 'id': 'tito-selfcheck-file'}],
+                            'params': {'function_calling': 'native'},
+                            'session_id': 'tito-selfcheck',
+                        },
+                    },
+                    features=tito.tito_features(),
+                    model=tito_model,
+                    is_note_chat=False,
+                )
+            except Exception:
+                log.exception('Tito self-check get_builtin_tools failed')
+                failures.append('get_builtin_tools raised')
+            tool_ids = ((tito_model.get('info') or {}).get('meta') or {}).get('toolIds') or []
+            user_tools = {}
+            if tool_ids:
+                try:
+                    user_tools = await get_tools(
+                        request,
+                        tool_ids,
+                        tito_user,
+                        {
+                            '__user__': tito_user.model_dump(),
+                            '__model__': tito_model,
+                            '__messages__': [],
+                            '__files__': [],
+                            '__metadata__': {'session_id': 'tito-selfcheck'},
+                        },
+                    )
+                except Exception:
+                    log.exception('Tito self-check get_tools failed')
+                    failures.append('get_tools raised')
+                if not user_tools:
+                    failures.append('user tools empty')
+            tools = {**user_tools, **tools}
+            failures.extend(tito.tito_missing_tools(set(tools)))
+
+            if failures:
+                log.error('Tito self-check failed: %s', failures)
+                await _tito_notify(f'Tito self-check failed: {failures}', {})
+            else:
+                tools_file = os.getenv('TITO_TOOLS_FILE', '')
+                if tools_file:
+                    try:
+                        payload = [
+                            {
+                                'name': name,
+                                'description': (tool.get('spec') or {}).get('description', ''),
+                                'input_schema': (tool.get('spec') or {}).get('parameters', {}),
+                            }
+                            for name, tool in tools.items()
+                        ]
+                        with open(tools_file, 'w') as fh:
+                            fh.write(JSONCodec.dumps(payload))
+                    except Exception:
+                        log.exception('Tito self-check tool dump failed')
+                        await _tito_notify('Tito self-check failed: tool dump error', {})
+                log.info('Tito self-check passed (Tito up)')
 
     app.state.startup_complete = True
     await publish_event(request, EVENTS.SYSTEM_STARTUP_COMPLETED, source='system')
@@ -1100,6 +1208,30 @@ async def _set_direct_model(request: Request, model_item: dict, user) -> None:
     request.state.model = model_item
 
 
+def apply_tito_lock(form_data: dict, model_id, user, model: dict | None = None) -> None:
+    """Force the server-side Tito configuration, ignoring client UI state."""
+    if model_id != tito.TITO_MODEL_ID:
+        return
+
+    # Ignored client inputs (stripped wholesale).
+    form_data.pop('tool_ids', None)
+    form_data.pop('filter_ids', None)
+    form_data.pop('skill_ids', None)
+    form_data.pop('tool_servers', None)
+    form_data.pop('params', None)
+
+    # FORCE memory-only features, native function calling, pinned tokens + usage,
+    # and title-generation-only background tasks.
+    form_data['features'] = tito.tito_features()
+    form_data['params'] = {'function_calling': 'native', 'max_tokens': tito.TITO_MAX_TOKENS}
+    form_data['stream_options'] = tito.tito_stream_options()
+    form_data['background_tasks'] = tito.lock_background_tasks({})
+    # Tito's tools come ONLY from its own model config (meta.toolIds), never the client.
+    tool_ids = tito.tito_model_tool_ids(model)
+    if tool_ids:
+        form_data['tool_ids'] = tool_ids
+
+
 @app.post('/api/chat/completions')
 @app.post('/api/v1/chat/completions')  # Experimental: Compatibility with OpenAI API
 async def chat_completion(
@@ -1113,6 +1245,7 @@ async def chat_completion(
     model_id = form_data.get('model', None)
     request.state.model_id = model_id
     model_item = form_data.pop('model_item', {})
+    apply_tito_lock(form_data, model_id, user, request.app.state.MODELS.get(model_id))
     tasks = form_data.pop('background_tasks', None)
 
     from open_webui.utils.terminals import get_folder_terminal_defaults, initialize_terminal_directory
@@ -1314,6 +1447,9 @@ async def chat_completion(
             'client_ip': request.client.host if request.client else '',
             'internal': getattr(request.state, 'internal', False) is True,
             'chat_id': chat_id,
+            'tito_raw_system': (model_info.params.model_dump() or {}).get('system')
+            if model_id == tito.TITO_MODEL_ID and model_info
+            else None,
             'user_message': user_message,
             'user_message_id': user_message.get('id') if user_message else None,
             'assistant_message_id': form_data.pop('assistant_message_id', None),

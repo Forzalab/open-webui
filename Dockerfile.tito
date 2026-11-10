@@ -1,0 +1,3 @@
+ARG BASE=ghcr.io/forzalab/open-webui:tito-base
+FROM ${BASE}
+COPY backend/open_webui /app/backend/open_webui

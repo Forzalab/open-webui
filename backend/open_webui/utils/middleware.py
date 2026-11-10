@@ -14,6 +14,7 @@ import sys
 import textwrap
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.parse import unquote
 from uuid import uuid4
@@ -50,6 +51,7 @@ from open_webui.models.access_grants import AccessGrants
 from open_webui.models.chats import Chats
 from open_webui.models.config import Config
 from open_webui.models.folders import Folders
+from open_webui.models.memories import Memories
 from open_webui.models.models import Models
 from open_webui.models.users import UserModel, Users
 from open_webui.retrieval.utils import filter_source_metadata, get_sources_from_items
@@ -81,6 +83,9 @@ from open_webui.socket.main import (
 )
 from open_webui.tasks import append_response_stream, clear_response_stream, save_response_stream
 from open_webui.utils.access_control import has_permission
+from open_webui.utils import tito
+from open_webui.utils.tito_weather import fetch_fresno_weather
+from open_webui.utils.webhook import post_webhook
 from open_webui.utils.access_control.files import get_owner_accessible_folder_files
 from open_webui.utils.access_control.folders import has_folder_access
 from open_webui.utils.ask_user import stage_ask_user_tool_calls
@@ -186,6 +191,57 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
+
+
+async def _tito_notify(message: str, event_data: dict | None = None) -> None:
+    """Best-effort Discord alert for Tito failures (env-gated, never raises)."""
+    url = os.getenv('TITO_DISCORD_WEBHOOK', '')
+    if not url:
+        return
+    try:
+        await post_webhook('open-webui', url, message, event_data or {})
+    except Exception as e:
+        # Never log the exception text/traceback: it can embed the webhook URL.
+        log.debug('Tito Discord notification failed (%s)', type(e).__name__)
+
+
+async def _tito_last_chat_gap_hours(chat_id: str, user_message_id: str | None, user_id: str) -> int | None:
+    """Compute the last-chat gap in whole hours for the Tito status.
+
+    Uses the newest of (a) the previous user message in this chat and (b) the
+    newest ``updated_at`` of the user's OTHER chats, both read BEFORE this turn is
+    persisted. Returns ``None`` on no prior activity or on any error (never breaks
+    a request); the debug log carries no message content.
+    """
+    try:
+        now = int(time.time())
+        candidates: list[int] = []
+
+        # (a) previous user message in this chat (the user message before the newest one).
+        messages_map = await Chats.get_messages_map_by_chat_id(chat_id)
+        if messages_map:
+            for message in messages_map.values():
+                if not isinstance(message, dict) or message.get('role') != 'user':
+                    continue
+                if user_message_id and message.get('id') == user_message_id:
+                    continue
+                timestamp = message.get('timestamp')
+                if isinstance(timestamp, int) and timestamp > 0:
+                    candidates.append(timestamp)
+
+        # (b) newest updated_at of the user's OTHER chats.
+        chat_list = await Chats.get_chats_by_user_id(user_id)
+        for other in chat_list.items if chat_list else []:
+            if getattr(other, 'id', None) == chat_id:
+                continue
+            updated_at = getattr(other, 'updated_at', None)
+            if isinstance(updated_at, int) and updated_at > 0:
+                candidates.append(updated_at)
+
+        return tito.last_chat_gap_hours(now, candidates)
+    except Exception:
+        log.debug('Tito last-chat gap unavailable')
+        return None
 
 
 def _is_tool_result_error(value: Any) -> bool:
@@ -2066,11 +2122,16 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     user_message_id = metadata.get('user_message_id')
     pending_assistant_message = None
     chat = await Chats.get_chat_by_id(chat_id) if is_saved_chat_id(chat_id) else None
+    is_tito = tito.is_tito_model(model)
     is_note_chat = bool(chat and (chat.meta or {}).get('internal') is True and (chat.meta or {}).get('type') == 'note')
-    use_builtin_tools = is_note_chat or (
-        bool(metadata.get('session_id'))
-        and metadata.get('params', {}).get('function_calling') != 'legacy'
-        and (model.get('info', {}).get('meta', {}).get('capabilities') or {}).get('builtin_tools', True)
+    use_builtin_tools = (
+        is_note_chat
+        or is_tito
+        or (
+            bool(metadata.get('session_id'))
+            and metadata.get('params', {}).get('function_calling') != 'legacy'
+            and (model.get('info', {}).get('meta', {}).get('capabilities') or {}).get('builtin_tools', True)
+        )
     )
     metadata['include_file_context'] = bool(
         chat and chat.user_id == user.id and payload_tools is None and use_builtin_tools
@@ -2112,6 +2173,9 @@ async def process_chat_payload(request, form_data, user, metadata, model):
 
             system_message = get_system_message(form_data.get('messages', []))
             form_data['messages'] = [system_message, *db_messages] if system_message else db_messages
+
+            if is_tito:
+                form_data['messages'] = tito.expand_tito_status(form_data['messages'])
 
             # Inject image files into content as image_url parts (mirrors frontend logic)
             for message in form_data['messages']:
@@ -3003,6 +3067,63 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             convert_output_to_messages(initial_output, raw=True, reasoning_format=get_reasoning_format(model))
         )
         metadata['initial_output'] = initial_output
+
+    if is_tito:
+        chat_id = metadata.get('chat_id')
+        chat_error = tito.tito_chat_error(chat, chat_id, is_new_chat=False)
+        if chat_error:
+            log.error('Tito chat guard failed: %s (chat_id=%s)', chat_error, chat_id)
+            await _tito_notify(f'Tito chat guard: {chat_error}', {'chat_id': chat_id})
+            raise HTTPException(
+                status_code=403 if chat_error == tito.TITO_TEMP_CHAT_ERROR else 404,
+                detail=chat_error,
+            )
+
+        chat_meta = (chat.meta if chat else None) or {}
+        frozen_blocks = tito.get_frozen_tito_blocks(chat_meta)
+        if frozen_blocks is None:
+            raw_system = metadata.get('tito_raw_system')
+            try:
+                memories = await Memories.get_memories_by_user_id(user.id)
+                if memories is None:
+                    raise Exception('Memories.get_memories_by_user_id returned None')
+                block1, block2 = tito.build_tito_blocks(raw_system, memories)
+            except Exception:
+                log.exception('Tito memory snapshot failed; using unavailable sentinel')
+                block1, block2 = tito.build_tito_blocks_unavailable(raw_system)
+                await _tito_notify('Tito memory snapshot failed', {'chat_id': chat_id})
+            tito_system = tito.freeze_tito_system({}, block1, block2)['tito_system']
+            if is_saved_chat_id(chat_id):
+                await Chats.update_chat_meta_by_id(chat_id, {'tito_system': tito_system})
+        else:
+            tito_system = chat_meta['tito_system']
+
+        metadata['tito_system'] = tito_system
+        frozen = tito.join_tito_system(tito_system['block1'], tito_system['block2'])
+        form_data['messages'] = tito.apply_frozen_system(form_data['messages'], frozen)
+
+        # Status is built only for a NEW user message. A replay reuses the stored
+        # meta.tito_status (byte-identical, prompt-cache stable), so no DB or weather
+        # call happens on replay; ensure_tito_status ignores status_text in that case.
+        status_text = ''
+        if not tito.has_stored_tito_status(form_data['messages']):
+            last_chat_gap = await _tito_last_chat_gap_hours(chat_id, user_message_id, user.id)
+            weather = None
+            if last_chat_gap is None or last_chat_gap >= 3:
+                weather = await fetch_fresno_weather()
+            status_text = tito.build_tito_status(
+                metadata.get('variables', {}),
+                last_chat_gap_hours=last_chat_gap,
+                now=datetime.now(timezone.utc),
+                weather=weather,
+            )
+        form_data['messages'], status_to_persist = tito.ensure_tito_status(form_data['messages'], status_text)
+        if status_to_persist and is_saved_chat_id(chat_id) and user_message_id:
+            stored_user_message = await Chats.get_message_by_id_and_message_id(chat_id, user_message_id) or {}
+            if not (stored_user_message.get('meta') or {}).get('tito_status'):
+                await Chats.upsert_message_to_chat_by_id_and_message_id(
+                    chat_id, user_message_id, {'meta': {'tito_status': status_to_persist}}, touch=False
+                )
 
     form_data = normalize_messages_for_model(form_data)
 

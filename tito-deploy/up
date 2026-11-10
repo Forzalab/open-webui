@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# up: pull the newest tito commit + image, restart OWUI. No params.
+# Install once: curl -fsSL https://raw.githubusercontent.com/Forzalab/open-webui/tito/tito-deploy/up -o ~/.local/bin/up && chmod +x ~/.local/bin/up
+set -e
+curl -fsSL "https://raw.githubusercontent.com/Forzalab/open-webui/tito/tito-deploy/bootstrap.sh?$(date +%s)" | sudo bash
+C=/opt/tito/open-webui/tito-deploy/docker-compose.yml
+echo "commit: $(git -C /opt/tito/open-webui log --oneline -1)"
+sudo docker compose -f "$C" --env-file /opt/tito/.env ps --format 'table {{.Service}}\t{{.Status}}'
+echo "up: done"

@@ -1,0 +1,19 @@
+# Reverse proxy to owui. Caddy forwards websocket upgrades automatically.
+# TITO_DOMAIN = OAuth/login host (sslip); TITO_ALT_DOMAIN = API key host (duckdns).
+{$TITO_DOMAIN} {
+	reverse_proxy owui:8080
+}
+
+# duckdns: app clients (Conduit, API keys) get everything as-is. Only real
+# browser page loads (Sec-Fetch-Mode: navigate) go to the login host, so OAuth
+# cookies and the Google redirect URI live on one host. Conduit probes /health
+# and refuses cross-host redirects, so never redirect non-navigation requests.
+{$TITO_ALT_DOMAIN} {
+	@browser header Sec-Fetch-Mode navigate
+	handle @browser {
+		redir https://{$TITO_DOMAIN}{uri} 302
+	}
+	handle {
+		reverse_proxy owui:8080
+	}
+}

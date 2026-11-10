@@ -1,0 +1,84 @@
+name: Build and publish Tito image
+
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        type: boolean
+        default: false
+        description: "full build, then tag tito-base; run once after an upstream sync"
+      test:
+        type: boolean
+        default: false
+        description: "run Tito pytest in the image"
+  push:
+    branches:
+      - tito
+
+concurrency:
+  group: tito-image
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5.1.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3.12.0
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3.7.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build base (full)
+        if: inputs.base == true
+        uses: docker/build-push-action@v5.4.0
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ghcr.io/forzalab/open-webui:tito-base
+            ghcr.io/forzalab/open-webui:tito
+            ghcr.io/forzalab/open-webui:tito-${{ github.sha }}
+          cache-from: type=gha,scope=tito
+          cache-to: type=gha,scope=tito,mode=max
+          build-args: |
+            BUILD_HASH=${{ github.sha }}
+            BUILD_CHANNEL=${{ github.ref == 'refs/heads/dev' && 'dev' || (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && 'main' || 'unknown' }}
+
+      - name: Build thin
+        if: inputs.base != true
+        uses: docker/build-push-action@v5.4.0
+        with:
+          context: .
+          file: Dockerfile.tito
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ghcr.io/forzalab/open-webui:tito
+            ghcr.io/forzalab/open-webui:tito-${{ github.sha }}
+          cache-from: type=gha,scope=tito-thin
+          cache-to: type=gha,scope=tito-thin,mode=max
+          build-args: |
+            BASE=ghcr.io/forzalab/open-webui:tito-base
+
+      - name: Run Tito tests inside the built image
+        if: inputs.test == true || (github.event_name == 'push' && contains(github.event.head_commit.message, '[test]'))
+        run: |
+          docker run --rm -v "$PWD/backend/open_webui/test/tito:/tito-tests:ro" \
+            -e WEBUI_SECRET_KEY=ci-only-not-secret --entrypoint bash ghcr.io/forzalab/open-webui:tito-${{ github.sha }} -c \
+            "pip install -q pytest pytest-asyncio && cd /app/backend && cp -r /tito-tests open_webui/test/tito_ci && python -m pytest open_webui/test/tito_ci -q -p no:cacheprovider"
