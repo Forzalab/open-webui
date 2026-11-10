@@ -15,7 +15,7 @@ services:
       ENABLE_OAUTH_SIGNUP: "false"
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
-      ENABLE_LOGIN_FORM: "false"
+      ENABLE_LOGIN_FORM: "true"
       ENABLE_SIGNUP: "false"
       DEFAULT_LOCALE: vi-VN
       ENABLE_VERSION_UPDATE_CHECK: "false"
@@ -39,7 +39,7 @@ services:
       PENDING_USER_OVERLAY_CONTENT: "Tài khoản này chưa được cho phép. Xin liên hệ Tùng (Dori)."
       OAUTH_MERGE_ACCOUNTS_BY_EMAIL: "true"
       DEFAULT_USER_ROLE: "pending"
-      ENABLE_PASSWORD_AUTH: "false"
+      ENABLE_PASSWORD_AUTH: "true"
       ENABLE_PASSWORD_CHANGE_FORM: "false"
       WEBUI_AUTH_COOKIE_SECURE: "true"
       WEBUI_SESSION_COOKIE_SECURE: "true"
