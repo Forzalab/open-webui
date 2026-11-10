@@ -9,10 +9,15 @@ otherwise the locked plan / vet document / Orc decision that defines the value.
 No value is "because the spec says".
 """
 
+import asyncio
 import hashlib
+import re
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from open_webui.utils import tito
+import pytest
+
+from open_webui.utils import tito, tito_weather
 
 # --- PATCH G: model gating + locked config ---------------------------------
 
@@ -458,3 +463,181 @@ def test_tito_model_tool_ids_from_model_info_meta():
     assert tito_model_tool_ids(model) == ['ping_tony']
     assert tito_model_tool_ids({'id': 'tito'}) == []
     assert tito_model_tool_ids(None) == []
+
+
+# --- T3: computed time / season / holidays / weather -------------------------
+
+# 2026-11-10 04:00 PST (UTC-8, DST already ended) == 12:00 UTC; a Tuesday.
+NOW_PST = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    'month, expected',
+    [
+        (1, 'mùa đông'),
+        (2, 'mùa đông'),
+        (3, 'mùa xuân'),
+        (5, 'mùa xuân'),
+        (6, 'mùa hạ'),
+        (8, 'mùa hạ'),
+        (9, 'mùa thu'),
+        (11, 'mùa thu'),
+        (12, 'mùa đông'),
+    ],
+)
+def test_season_by_month(month, expected):
+    assert tito.season_vi(month) == expected
+
+
+def test_time_and_season_lines_from_now_in_fresno_time():
+    lines = tito.build_time_lines(NOW_PST)
+    assert lines[0] == 'time: thứ ba, 10/11/2026 04:00 (giờ Fresno)'
+    assert lines[1] == 'season: mùa thu'
+
+
+def test_holidays_next_two_each_country_with_countdown():
+    # US: Thanksgiving 2026-11-26 (16 days), Christmas 2026-12-25 (45 days).
+    # VN: Tết 2027-02-06 (88 days), Giỗ Tổ 2027-04-16 (157 days).
+    lines = tito.build_time_lines(NOW_PST)
+    assert lines[2] == (
+        'holidays: US: Thanksgiving 26/11 (còn 16 ngày), Christmas 25/12 (còn 45 ngày); '
+        'VN: Tết Nguyên Đán 06/02 (còn 88 ngày), Giỗ Tổ Hùng Vương 16/04 (còn 157 ngày)'
+    )
+
+
+def test_us_rule_based_holidays_2026():
+    days = {name: day for day, name in tito.us_holidays(2026)}
+    assert days['Memorial Day'].isoformat() == '2026-05-25'  # last Monday of May
+    assert days['Labor Day'].isoformat() == '2026-09-07'  # first Monday of September
+    assert days['Thanksgiving'].isoformat() == '2026-11-26'  # fourth Thursday of November
+
+
+def test_build_status_variables_present_unchanged_even_with_now():
+    # Variables win: the computed time line and season/holidays are not added.
+    variables = {'CURRENT_DATETIME': '2026-11-09', 'CURRENT_TIMEZONE': 'America/Los_Angeles', 'USER_LOCATION': 'Fresno'}
+    with_now = tito.build_tito_status(variables, now=NOW_PST)
+    assert with_now == tito.build_tito_status(variables)
+    assert with_now == '<context>\ntime: 2026-11-09\ntimezone: America/Los_Angeles\nlocation: Fresno\n</context>'
+
+
+def test_build_status_without_variables_or_now_has_no_computed_lines():
+    assert tito.build_tito_status({}) == '<context>\n</context>'
+
+
+def test_build_status_computed_lines_when_variables_missing():
+    s = tito.build_tito_status({}, now=NOW_PST)
+    assert s.startswith('<context>\ntime: thứ ba, 10/11/2026 04:00 (giờ Fresno)\nseason: mùa thu\nholidays: US: ')
+    assert s.endswith('\n</context>')
+
+
+def test_weather_line_only_when_given_and_before_last_chat():
+    base = tito.build_tito_status({}, now=NOW_PST, last_chat_gap_hours=3)
+    assert 'weather' not in base
+    s = tito.build_tito_status({}, now=NOW_PST, last_chat_gap_hours=3, weather='mưa, 58°F (thấp 50 cao 61)')
+    assert s == base.replace('last chat:', 'weather Fresno: mưa, 58°F (thấp 50 cao 61)\nlast chat:')
+
+
+def test_has_stored_status_detects_replay_on_newest_user_message():
+    fresh = [{'role': 'user', 'content': 'hi'}]
+    replay = [{'role': 'user', 'content': 'hi', 'meta': {'tito_status': '<context>\n</context>'}}]
+    assert tito.has_stored_tito_status(fresh) is False
+    assert tito.has_stored_tito_status(replay) is True
+    assert tito.has_stored_tito_status([]) is False
+
+
+def test_replay_keeps_stored_status_and_does_not_persist():
+    stored = '<context>\ntime: old\n</context>'
+    messages = [{'role': 'user', 'content': 'hi', 'meta': {'tito_status': stored}}]
+    out, to_persist = tito.ensure_tito_status(messages, '<context>\ntime: NEW\n</context>')
+    assert to_persist is None
+    assert out[1]['content'] == stored
+
+
+@pytest.mark.parametrize(
+    'code, word',
+    [
+        (0, 'trời quang'),
+        (2, 'có mây'),
+        (3, 'có mây'),
+        (45, 'sương mù'),
+        (48, 'sương mù'),
+        (61, 'mưa'),
+        (67, 'mưa'),
+        (73, 'tuyết'),
+        (81, 'mưa rào'),
+        (95, 'giông'),
+        (99, 'giông'),
+        (4, 'không rõ'),
+    ],
+)
+def test_weather_code_to_vietnamese_word(code, word):
+    assert tito_weather.weather_word(code) == word
+
+
+def test_format_weather_rounds_and_formats():
+    data = {
+        'current': {'temperature_2m': 57.6, 'weather_code': 61},
+        'daily': {'temperature_2m_max': [61.2], 'temperature_2m_min': [49.9]},
+    }
+    assert tito_weather.format_weather(data) == 'mưa, 58°F (thấp 50 cao 61)'
+
+
+class _FakeResp:
+    def __init__(self, status=200, body=None):
+        self.status = status
+        self._body = body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def json(self, content_type=None):
+        return self._body
+
+
+class _FakeSession:
+    def __init__(self, resp):
+        self._resp = resp
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    def get(self, url):
+        return self._resp
+
+
+def test_fetch_weather_success_returns_text():
+    body = {
+        'current': {'temperature_2m': 58, 'weather_code': 61},
+        'daily': {'temperature_2m_max': [61], 'temperature_2m_min': [50]},
+    }
+    result = asyncio.run(tito_weather.fetch_fresno_weather(lambda: _FakeSession(_FakeResp(200, body))))
+    assert result == 'mưa, 58°F (thấp 50 cao 61)'
+
+
+def test_fetch_weather_exception_returns_none_and_logs_without_url(caplog):
+    def boom():
+        raise RuntimeError('boom https://api.open-meteo.com/secret-ish')
+
+    with caplog.at_level('WARNING'):
+        result = asyncio.run(tito_weather.fetch_fresno_weather(boom))
+    assert result is None
+    assert re.search(r'TITO-ERR T\d{4} PST-[0-9a-f]{4} weather RuntimeError', caplog.text)
+    assert 'open-meteo' not in caplog.text
+
+
+def test_fetch_weather_http_error_returns_none_and_logs_status(caplog):
+    with caplog.at_level('WARNING'):
+        result = asyncio.run(tito_weather.fetch_fresno_weather(lambda: _FakeSession(_FakeResp(503))))
+    assert result is None
+    assert re.search(r'TITO-ERR T\d{4} PST-[0-9a-f]{4} weather 503', caplog.text)
+
+
+def test_fetch_weather_malformed_payload_returns_none():
+    result = asyncio.run(tito_weather.fetch_fresno_weather(lambda: _FakeSession(_FakeResp(200, {'x': 1}))))
+    assert result is None

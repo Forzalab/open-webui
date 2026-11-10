@@ -8,6 +8,8 @@ config, or env imports so its functions remain unit-testable without a live app.
 from __future__ import annotations
 
 import hashlib
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from open_webui.utils.chat_id import is_temporary_chat_id
 
@@ -16,6 +18,33 @@ SNAPSHOT_HEADING = 'NHỮNG ĐIỀU TITO NHỚ VỀ ÔNG'
 NO_MEMORIES_SENTINEL = '(chưa có ký ức nào)'
 MEMORY_UNAVAILABLE_SENTINEL = '(memory unavailable this chat)'
 TITO_MAX_TOKENS = 16000
+
+FRESNO_TZ = ZoneInfo('America/Los_Angeles')
+WEEKDAYS_VI = ('thứ hai', 'thứ ba', 'thứ tư', 'thứ năm', 'thứ sáu', 'thứ bảy', 'chủ nhật')
+# Solar-calendar dates of lunar-calendar holidays in Vietnam (hard-coded, 2026-2030).
+VN_LUNAR_HOLIDAYS = {
+    'Tết Nguyên Đán': {
+        2026: date(2026, 2, 17),
+        2027: date(2027, 2, 6),
+        2028: date(2028, 1, 26),
+        2029: date(2029, 2, 13),
+        2030: date(2030, 2, 3),
+    },
+    'Giỗ Tổ Hùng Vương': {
+        2026: date(2026, 4, 26),
+        2027: date(2027, 4, 16),
+        2028: date(2028, 4, 4),
+        2029: date(2029, 4, 23),
+        2030: date(2030, 4, 12),
+    },
+    'Trung Thu': {
+        2026: date(2026, 9, 25),
+        2027: date(2027, 9, 15),
+        2028: date(2028, 10, 3),
+        2029: date(2029, 9, 22),
+        2030: date(2030, 9, 12),
+    },
+}
 
 # Orc O3 — Vietnamese error strings (exact text lives in KEY.md, not present here).
 TITO_TEMP_CHAT_ERROR = 'Tito không hỗ trợ trò chuyện tạm thời. Vui lòng tạo một cuộc trò chuyện đã lưu.'
@@ -135,15 +164,107 @@ def last_chat_gap_hours(now_epoch: int, candidates: list[int | None]) -> int | N
     return gap // 3600
 
 
-def build_tito_status(variables: dict, budget_counters=None, last_chat_gap_hours=None) -> str:
+def season_vi(month: int) -> str:
+    """Northern-hemisphere season name in Vietnamese (3-5 xuân, 6-8 hạ, 9-11 thu, else đông)."""
+    if month in (3, 4, 5):
+        return 'mùa xuân'
+    if month in (6, 7, 8):
+        return 'mùa hạ'
+    if month in (9, 10, 11):
+        return 'mùa thu'
+    return 'mùa đông'
+
+
+def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    first = date(year, month, 1)
+    return first + timedelta(days=(weekday - first.weekday()) % 7 + 7 * (n - 1))
+
+
+def _last_weekday(year: int, month: int, weekday: int) -> date:
+    next_month = date(year + (month == 12), month % 12 + 1, 1)
+    last = next_month - timedelta(days=1)
+    return last - timedelta(days=(last.weekday() - weekday) % 7)
+
+
+def us_holidays(year: int) -> list[tuple[date, str]]:
+    """Rule-based US holidays (weekday = Mon 0 .. Sun 6)."""
+    return [
+        (date(year, 1, 1), 'New Year'),
+        (_last_weekday(year, 5, 0), 'Memorial Day'),
+        (date(year, 7, 4), 'Independence Day'),
+        (_nth_weekday(year, 9, 0, 1), 'Labor Day'),
+        (_nth_weekday(year, 11, 3, 4), 'Thanksgiving'),
+        (date(year, 12, 25), 'Christmas'),
+    ]
+
+
+def vn_holidays(year: int) -> list[tuple[date, str]]:
+    """Vietnamese holidays: hard-coded lunar dates (where the year is in the table) plus fixed 30/4 and 2/9."""
+    out = [(dates[year], name) for name, dates in VN_LUNAR_HOLIDAYS.items() if year in dates]
+    out.append((date(year, 4, 30), '30/4'))
+    out.append((date(year, 9, 2), '2/9'))
+    return out
+
+
+def next_holidays(pool: list[tuple[date, str]], today: date, count: int = 2) -> list[tuple[date, str]]:
+    return sorted(item for item in pool if item[0] >= today)[:count]
+
+
+def _holiday_text(items: list[tuple[date, str]], today: date) -> str:
+    return ', '.join(f'{name} {day:%d/%m} (còn {(day - today).days} ngày)' for day, name in items)
+
+
+def build_time_lines(now: datetime) -> list[str]:
+    """Computed time/season/holidays lines in Fresno (America/Los_Angeles) local time.
+
+    A naive ``now`` is treated as UTC (guess: callers should pass an aware datetime).
+    """
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    local = now.astimezone(FRESNO_TZ)
+    today = local.date()
+    lines = [
+        f'time: {WEEKDAYS_VI[local.weekday()]}, {local:%d/%m/%Y} {local:%H:%M} (giờ Fresno)',
+        f'season: {season_vi(local.month)}',
+    ]
+    years = (today.year, today.year + 1)
+    us_pool = [item for year in years for item in us_holidays(year)]
+    vn_pool = [item for year in years for item in vn_holidays(year)]
+    parts = []
+    us_next = next_holidays(us_pool, today)
+    vn_next = next_holidays(vn_pool, today)
+    if us_next:
+        parts.append(f'US: {_holiday_text(us_next, today)}')
+    if vn_next:
+        parts.append(f'VN: {_holiday_text(vn_next, today)}')
+    if parts:
+        lines.append(f'holidays: {"; ".join(parts)}')
+    return lines
+
+
+def has_stored_tito_status(messages: list[dict]) -> bool:
+    """True when the newest user message already carries ``meta.tito_status`` (a replay)."""
+    for message in reversed(messages or []):
+        if message.get('role') == 'user':
+            return bool((message.get('meta') or {}).get('tito_status'))
+    return False
+
+
+def build_tito_status(
+    variables: dict, budget_counters=None, last_chat_gap_hours=None, now: datetime | None = None, weather=None
+) -> str:
     variables = variables or {}
     lines = ['<context>']
     if variables.get('CURRENT_DATETIME'):
         lines.append(f'time: {variables["CURRENT_DATETIME"]}')
+    elif now is not None:
+        lines.extend(build_time_lines(now))
     if variables.get('CURRENT_TIMEZONE'):
         lines.append(f'timezone: {variables["CURRENT_TIMEZONE"]}')
     if variables.get('USER_LOCATION'):
         lines.append(f'location: {variables["USER_LOCATION"]}')
+    if weather:
+        lines.append(f'weather Fresno: {weather}')
     if last_chat_gap_hours is not None:
         lines.append(f'last chat: {last_chat_gap_hours}h ago')
     lines.append('</context>')
