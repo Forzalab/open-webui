@@ -14,6 +14,7 @@ import sys
 import textwrap
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.parse import unquote
 from uuid import uuid4
@@ -83,6 +84,7 @@ from open_webui.socket.main import (
 from open_webui.tasks import append_response_stream, clear_response_stream, save_response_stream
 from open_webui.utils.access_control import has_permission
 from open_webui.utils import tito
+from open_webui.utils.tito_weather import fetch_fresno_weather
 from open_webui.utils.webhook import post_webhook
 from open_webui.utils.access_control.files import get_owner_accessible_folder_files
 from open_webui.utils.access_control.folders import has_folder_access
@@ -3100,10 +3102,21 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         frozen = tito.join_tito_system(tito_system['block1'], tito_system['block2'])
         form_data['messages'] = tito.apply_frozen_system(form_data['messages'], frozen)
 
-        status_text = tito.build_tito_status(
-            metadata.get('variables', {}),
-            last_chat_gap_hours=await _tito_last_chat_gap_hours(chat_id, user_message_id, user.id),
-        )
+        # Status is built only for a NEW user message. A replay reuses the stored
+        # meta.tito_status (byte-identical, prompt-cache stable), so no DB or weather
+        # call happens on replay; ensure_tito_status ignores status_text in that case.
+        status_text = ''
+        if not tito.has_stored_tito_status(form_data['messages']):
+            last_chat_gap = await _tito_last_chat_gap_hours(chat_id, user_message_id, user.id)
+            weather = None
+            if last_chat_gap is None or last_chat_gap >= 3:
+                weather = await fetch_fresno_weather()
+            status_text = tito.build_tito_status(
+                metadata.get('variables', {}),
+                last_chat_gap_hours=last_chat_gap,
+                now=datetime.now(timezone.utc),
+                weather=weather,
+            )
         form_data['messages'], status_to_persist = tito.ensure_tito_status(form_data['messages'], status_text)
         if status_to_persist and is_saved_chat_id(chat_id) and user_message_id:
             stored_user_message = await Chats.get_message_by_id_and_message_id(chat_id, user_message_id) or {}
