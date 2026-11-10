@@ -36,7 +36,7 @@ services:
       WEBUI_NAME: "Tito"
       DEFAULT_PROMPT_SUGGESTIONS: "[]"
       PENDING_USER_OVERLAY_TITLE: "Đang chờ duyệt"
-      PENDING_USER_OVERLAY_CONTENT: "Tài khoản này chưa được cho phép. Xin liên hệ Tony."
+      PENDING_USER_OVERLAY_CONTENT: "Tài khoản này chưa được cho phép. Xin liên hệ Tùng (Dori)."
       OAUTH_MERGE_ACCOUNTS_BY_EMAIL: "true"
       DEFAULT_USER_ROLE: "pending"
       ENABLE_PASSWORD_AUTH: "false"
