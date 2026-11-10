@@ -1,3 +1,4 @@
+import re
 """Tests for the standalone ``ping_tony`` Open WebUI Tool (TASK B).
 
 The tool lives at ``tito-deploy/tools/ping_tony.py`` and is installed later via
@@ -18,7 +19,8 @@ _spec.loader.exec_module(module)
 
 SUCCESS = 'Đã nhắn Tùng.'
 RATE_LIMITED = 'Đã nhắn Tùng rồi, đang chờ.'
-ERROR = 'Chưa nhắn được Tùng (lỗi kỹ thuật).'
+ERROR = 'Chưa nhắn được Tùng (mã {code}).'
+ERROR_RE = r'^Chưa nhắn được Tùng \(mã T\d{4}-[0-9a-f]{4}\)\.$'
 
 WEBHOOK = 'https://discord.example/api/webhooks/1/2'
 ADMIN_BASE = 'https://185-147-159-26.sslip.io'
@@ -144,7 +146,7 @@ def test_no_webhook_returns_error(monkeypatch):
     # SOURCE: brief TASK B — no webhook configured -> error string, never raises.
     tools = _make_tools(monkeypatch, webhook='')
     out = asyncio.run(tools.ping_tony('x', __metadata__={'chat_id': 'c1'}))
-    assert out == ERROR
+    assert re.match(ERROR_RE, out), out
 
 
 def test_http_error_returns_error(monkeypatch):
@@ -155,4 +157,4 @@ def test_http_error_returns_error(monkeypatch):
     monkeypatch.setattr(module, '_post_discord_webhook', boom)
     tools = _make_tools(monkeypatch)
     out = asyncio.run(tools.ping_tony('x', __metadata__={'chat_id': 'c1'}))
-    assert out == ERROR
+    assert re.match(ERROR_RE, out), out

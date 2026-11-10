@@ -9,7 +9,12 @@ import asyncio
 import json
 import os
 import time
+import logging
+import secrets
+import urllib.error
 import urllib.request
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 
@@ -21,7 +26,16 @@ _LAST_PING: dict[str, float] = {}
 
 SUCCESS = 'Đã nhắn Tùng.'
 RATE_LIMITED = 'Đã nhắn Tùng rồi, đang chờ.'
-ERROR = 'Chưa nhắn được Tùng (lỗi kỹ thuật).'
+ERROR = 'Chưa nhắn được Tùng (mã {code}).'
+USER_AGENT = 'TitoBot (https://titodori.duckdns.org, 1.0)'  # Cloudflare blocks the default Python-urllib UA (403, error 1010)
+log = logging.getLogger(__name__)
+
+
+def _incident(detail: str) -> str:
+    """Log one TITO-ERR line and return its code (no URLs or tokens in detail)."""
+    code = f"T{datetime.now(ZoneInfo('America/Los_Angeles')):%H%M}-{secrets.token_hex(2)}"
+    log.error('TITO-ERR %s ping_tony %s', code, detail)
+    return code
 
 
 def _message_text(message: dict) -> str:
@@ -59,7 +73,7 @@ def _post_discord_webhook(url: str, payload: dict) -> bool:
     req = urllib.request.Request(
         url,
         data=data,
-        headers={'Content-Type': 'application/json'},
+        headers={'Content-Type': 'application/json', 'User-Agent': USER_AGENT},
         method='POST',
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
@@ -95,7 +109,7 @@ class Tools:
         """
         url = self.valves.discord_webhook_url or ''
         if not url:
-            return ERROR
+            return ERROR.format(code=_incident('webhook url empty'))
 
         metadata = __metadata__ or {}
         chat_id = metadata.get('chat_id') or ''
@@ -125,12 +139,15 @@ class Tools:
             'username': 'Ping Tung',
         }
 
+        detail = 'non-2xx'
         try:
             posted = await asyncio.to_thread(_post_discord_webhook, url, payload)
-        except Exception:
-            posted = False
+        except urllib.error.HTTPError as e:
+            posted, detail = False, f'http {e.code}'
+        except Exception as e:
+            posted, detail = False, type(e).__name__
 
         if posted:
             _LAST_PING[chat_id] = now
             return SUCCESS
-        return ERROR
+        return ERROR.format(code=_incident(detail))
