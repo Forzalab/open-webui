@@ -97,3 +97,5 @@ fi
 # 8. Pull the image (built by GitHub Actions), then start/update.
 docker compose -f "$REPO/tito-deploy/docker-compose.yml" --env-file "$ENV_FILE" pull owui
 docker compose -f "$REPO/tito-deploy/docker-compose.yml" --env-file "$ENV_FILE" up -d
+# Caddyfile is a single-file bind mount; git swaps the inode, so recreate caddy to pick up edits.
+docker compose -f "$REPO/tito-deploy/docker-compose.yml" --env-file "$ENV_FILE" up -d --force-recreate --no-deps caddy
