@@ -1,5 +1,7 @@
 # tito-deploy/edge (DRAFT from box, 2026-11-10). Orc: commit on a branch as tito-deploy/edge/.
 
+> RETIRED 2026-11-11: edge VM deleted, DNS titodori -> box. Compose no longer binds 10.77.0.2. To undo box-wg.sh on the box: `up`, then `sudo bash box-wg-off.sh`. Files below kept as history.
+
 Order (key exchange, public keys only):
 
 1. box: sudo EDGE_WG_PUB=placeholder bash box-wg.sh → prints BOX pub (tunnel down until step 3)
