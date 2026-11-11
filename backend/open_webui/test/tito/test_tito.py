@@ -742,3 +742,113 @@ def test_tito_notify_failure_logs_tito_err_without_webhook_url(monkeypatch, capl
     assert re.search(r'TITO-ERR T\d{4}-[0-9a-f]{4} discord_notify RuntimeError post failed for <url>', caplog.text)
     assert 'SECRET-TOKEN' not in caplog.text
     assert 'discord.com' not in caplog.text
+
+
+# --- INTERJECT: hidden next-turn admin note + chat refreeze -----------------
+
+from open_webui.utils import tito_interject  # noqa: E402
+
+
+def test_interject_add_then_pop_returns_oldest_first_and_removes(tmp_path):
+    p = str(tmp_path / 'i.json')
+    tito_interject.add_note('u1', '  first  ', now=1000.0, path=p)
+    tito_interject.add_note('u1', 'second', now=1001.0, path=p)
+    assert tito_interject.pop_notes('u1', now=1002.0, path=p) == ['first', 'second']
+    assert tito_interject.pop_notes('u1', now=1002.0, path=p) == []
+
+
+def test_interject_pop_is_per_user(tmp_path):
+    p = str(tmp_path / 'i.json')
+    tito_interject.add_note('u1', 'for one', now=1000.0, path=p)
+    tito_interject.add_note('u2', 'for two', now=1000.0, path=p)
+    assert tito_interject.pop_notes('u2', now=1001.0, path=p) == ['for two']
+    assert tito_interject.pop_notes('u1', now=1001.0, path=p) == ['for one']
+
+
+def test_interject_rejects_empty_and_too_long(tmp_path):
+    p = str(tmp_path / 'i.json')
+    with pytest.raises(ValueError):
+        tito_interject.add_note('u1', '   ', now=1.0, path=p)
+    with pytest.raises(ValueError):
+        tito_interject.add_note('u1', 'x' * 1001, now=1.0, path=p)
+    assert tito_interject.add_note('u1', 'x' * 1000, now=1.0, path=p) == ['x' * 1000]
+
+
+def test_interject_expiry_after_24h(tmp_path):
+    p = str(tmp_path / 'i.json')
+    tito_interject.add_note('u1', 'old', now=0.0, path=p)
+    tito_interject.add_note('u1', 'fresh', now=tito_interject.NOTE_TTL_SECONDS - 10, path=p)
+    now = tito_interject.NOTE_TTL_SECONDS + 1
+    assert tito_interject.pending(path=p, now=now) == {
+        'u1': [{'text': 'fresh', 'ts': float(tito_interject.NOTE_TTL_SECONDS - 10)}]
+    }
+    assert tito_interject.pop_notes('u1', now=now, path=p) == ['fresh']
+
+
+def test_interject_max_five_drops_oldest(tmp_path):
+    p = str(tmp_path / 'i.json')
+    for i in range(7):
+        tito_interject.add_note('u1', f'n{i}', now=100.0 + i, path=p)
+    assert tito_interject.pop_notes('u1', now=200.0, path=p) == ['n2', 'n3', 'n4', 'n5', 'n6']
+
+
+def test_interject_clear_returns_count(tmp_path):
+    p = str(tmp_path / 'i.json')
+    tito_interject.add_note('u1', 'a', now=1.0, path=p)
+    tito_interject.add_note('u1', 'b', now=1.0, path=p)
+    assert tito_interject.clear('u1', path=p) == 2
+    assert tito_interject.clear('u1', path=p) == 0
+    assert tito_interject.pop_notes('u1', now=2.0, path=p) == []
+
+
+def test_interject_corrupt_file_pop_returns_empty_without_raising(tmp_path, caplog):
+    p = tmp_path / 'i.json'
+    p.write_text('{not json', encoding='utf-8')
+    with caplog.at_level('WARNING'):
+        assert tito_interject.pop_notes('u1', now=1.0, path=str(p)) == []
+    assert 'interject' in caplog.text
+
+
+def test_interject_non_object_json_is_empty(tmp_path):
+    p = tmp_path / 'i.json'
+    p.write_text('["x"]', encoding='utf-8')
+    assert tito_interject.pending(path=str(p), now=1.0) == {}
+    assert tito_interject.pop_notes('u1', now=1.0, path=str(p)) == []
+
+
+def test_interject_format_notes():
+    assert tito_interject.format_notes([]) == ''
+    assert tito_interject.format_notes(['gọi lại', 'nhớ uống thuốc']) == (
+        'Tùng dặn (nói lại tự nhiên trong câu trả lời, một lần thôi): gọi lại\n'
+        'Tùng dặn (nói lại tự nhiên trong câu trả lời, một lần thôi): nhớ uống thuốc'
+    )
+
+
+def test_interject_match_user_accent_and_case_insensitive():
+    users = [('id-1', 'Đính'), ('id-2', 'Ngân'), ('id-3', 'Tùng')]
+    assert tito_interject.match_user(users, 'dinh') == ('id-1', 'Đính')
+    assert tito_interject.match_user(users, 'NGAN') == ('id-2', 'Ngân')
+    assert tito_interject.match_user(users, 'id-3') == ('id-3', 'Tùng')
+    assert tito_interject.match_user(users, 'nobody') is None
+    assert tito_interject.match_user(users, '') is None
+
+
+def test_interject_match_user_ambiguous_is_none():
+    users = [('a', 'Ngân'), ('b', 'Ngan')]
+    assert tito_interject.match_user(users, 'ngan') is None
+    assert tito_interject.match_user([('a', 'Hoàng Ngân'), ('b', 'Ngân Nguyễn')], 'ngan') is None
+    assert tito_interject.match_user([('a', 'Hoàng Ngân'), ('b', 'Minh')], 'ngan') == ('a', 'Hoàng Ngân')
+
+
+def test_drop_frozen_system_removes_only_that_key():
+    meta = {'tito_system': {'block1': 'a', 'block2': 'b', 'sha256': 'x'}, 'tags': ['t'], 'other': 1}
+    new_meta, had = tito.drop_frozen_system(meta)
+    assert had is True
+    assert new_meta == {'tags': ['t'], 'other': 1}
+    assert 'tito_system' in meta  # input not mutated
+
+
+def test_drop_frozen_system_absent_or_empty():
+    assert tito.drop_frozen_system({'tags': []}) == ({'tags': []}, False)
+    assert tito.drop_frozen_system({}) == ({}, False)
+    assert tito.drop_frozen_system(None) == ({}, False)
