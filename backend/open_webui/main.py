@@ -926,9 +926,10 @@ app.include_router(retrieval.router, prefix='/api/v1/retrieval', tags=['retrieva
 app.include_router(configs.router, prefix='/api/v1/configs', tags=['configs'])
 
 from open_webui.env import UVICORN_WORKERS, REDIS_URL
-from open_webui.routers import tether
+from open_webui.routers import tether, tito as tito_router
 
 app.include_router(tether.router, prefix='/api/v1/tether', tags=['tether'])
+app.include_router(tito_router.router, prefix='/api/v1/tito', tags=['tito'])
 app.include_router(auths.router, prefix='/api/v1/auths', tags=['auths'])
 app.include_router(mfa.router, prefix='/api/v1/auths/mfa', tags=['auths'])
 app.include_router(users.router, prefix='/api/v1/users', tags=['users'])

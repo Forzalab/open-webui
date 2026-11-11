@@ -1074,6 +1074,12 @@ class ChatTable:
             await session.execute(update(Chat).filter_by(id=id).values(meta={**meta, **meta_patch}))
             await session.commit()
 
+    async def replace_chat_meta_by_id(self, id: str, meta: dict) -> None:
+        """Overwrite a chat's ``meta`` column wholesale (for removing keys; merge can't drop them)."""
+        async with get_async_db_context() as session:
+            await session.execute(update(Chat).filter_by(id=id).values(meta=meta))
+            await session.commit()
+
     async def get_chat_title_by_id(self, id: str) -> str | None:
         async with get_async_db_context() as session:
             result = await session.execute(select(Chat.title).filter_by(id=id))

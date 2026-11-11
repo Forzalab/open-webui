@@ -84,6 +84,7 @@ from open_webui.socket.main import (
 from open_webui.tasks import append_response_stream, clear_response_stream, save_response_stream
 from open_webui.utils.access_control import has_permission
 from open_webui.utils import tito
+from open_webui.utils import tito_interject
 from open_webui.utils.tito_weather import fetch_fresno_weather
 from open_webui.utils.tito import tito_notify
 from open_webui.utils.access_control.files import get_owner_accessible_folder_files
@@ -3105,6 +3106,13 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 now=datetime.now(timezone.utc),
                 weather=weather,
             )
+            try:
+                notes = tito_interject.pop_notes(user.id)
+                if notes:
+                    status_text = status_text + '\n' + tito_interject.format_notes(notes)
+                    log.info('[TITO] interject consumed n=%d', len(notes))
+            except Exception:
+                log.warning('[TITO] interject consume failed; continuing without note')
         form_data['messages'], status_to_persist = tito.ensure_tito_status(form_data['messages'], status_text)
         if status_to_persist and is_saved_chat_id(chat_id) and user_message_id:
             stored_user_message = await Chats.get_message_by_id_and_message_id(chat_id, user_message_id) or {}

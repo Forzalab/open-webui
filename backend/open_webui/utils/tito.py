@@ -127,6 +127,13 @@ def freeze_tito_system(meta: dict, block1: str, block2: str) -> dict:
     return meta
 
 
+def drop_frozen_system(meta: dict) -> tuple[dict, bool]:
+    """Return ``(new_meta, had)`` with only ``tito_system`` removed; the input is not mutated."""
+    new_meta = dict(meta or {})
+    had = new_meta.pop('tito_system', None) is not None
+    return new_meta, had
+
+
 def join_tito_system(block1: str, block2: str) -> str:
     """Single frozen system string; the pipe splits it on the first ``\\n\\n`` + SNAPSHOT_HEADING."""
     return f'{block1}\n\n{block2}'
