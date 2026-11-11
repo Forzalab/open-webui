@@ -4,6 +4,8 @@
 # Env: BOX_WG_PUB (box wg public key, required), EDGE_HOST (default titodori.duckdns.org),
 #      EDGE_TLS_INTERNAL=1 for the dry run before DNS moves (self-signed cert), OWUI_UPSTREAM (default 10.77.0.2:8080).
 set -euo pipefail
+# Guard: this script must run on the GCP edge VM, never on the box.
+[ "$(hostname)" = tito-edge ] || { echo "edge-up.sh: run this on tito-edge (this host: $(hostname))" >&2; exit 1; }
 : "${BOX_WG_PUB:?set BOX_WG_PUB}"
 EDGE_HOST="${EDGE_HOST:-titodori.duckdns.org}"
 TLS_LINE=""; [ "${EDGE_TLS_INTERNAL:-0}" = 1 ] && TLS_LINE="tls internal"
