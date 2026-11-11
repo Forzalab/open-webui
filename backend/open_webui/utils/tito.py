@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 from open_webui.utils.chat_id import is_temporary_chat_id
 
 TITO_MODEL_ID = 'tito'
-SNAPSHOT_HEADING = 'NHỮNG ĐIỀU TITO NHỚ VỀ ÔNG'
+SNAPSHOT_HEADING = 'NHỮNG ĐIỀU TITO NHỚ VỀ ANH'
 NO_MEMORIES_SENTINEL = '(chưa có ký ức nào)'
 MEMORY_UNAVAILABLE_SENTINEL = '(memory unavailable this chat)'
 TITO_MAX_TOKENS = 16000
