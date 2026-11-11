@@ -12,6 +12,7 @@ No value is "because the spec says".
 import asyncio
 import hashlib
 import re
+import urllib.error
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -671,3 +672,67 @@ def test_fetch_weather_http_error_returns_none_and_logs_status(caplog):
 def test_fetch_weather_malformed_payload_returns_none():
     result = asyncio.run(tito_weather.fetch_fresno_weather(lambda: _FakeSession(_FakeResp(200, {'x': 1}))))
     assert result is None
+
+
+# --- TITO-ERR codes: places tool (standalone file) + tito_notify -------------
+
+_PLACES_KEY = 'AIza-TEST-KEY-do-not-leak-1234'
+
+
+def _load_places_tool():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[4] / 'tito-deploy' / 'tools' / 'places.py'
+    spec = importlib.util.spec_from_file_location('places_tool_under_test', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize(
+    'failure, expected_detail',
+    [
+        (lambda: urllib.error.HTTPError('https://places.googleapis.com/x', 500, 'boom', {}, None), '500'),
+        (lambda: TimeoutError('timed out'), 'timeout'),
+        (lambda: RuntimeError(f'boom {_PLACES_KEY} https://places.googleapis.com/v1'), 'RuntimeError'),
+    ],
+)
+def test_places_failure_logs_tito_err_and_returns_code(monkeypatch, caplog, failure, expected_detail):
+    places = _load_places_tool()
+    monkeypatch.setenv('TITO_PLACES_API_KEY', _PLACES_KEY)
+
+    def fake_urlopen(*args, **kwargs):
+        raise failure()
+
+    monkeypatch.setattr(places.urllib.request, 'urlopen', fake_urlopen)
+    with caplog.at_level('ERROR'):
+        result = asyncio.run(places.Tools().search_places('pharmacy'))
+
+    assert re.search(rf'TITO-ERR T\d{{4}}-[0-9a-f]{{4}} places {re.escape(expected_detail)}', caplog.text)
+    assert 'mã lỗi T' in result
+    assert _PLACES_KEY not in caplog.text
+    assert _PLACES_KEY not in result
+    assert 'places.googleapis' not in caplog.text
+
+
+def test_tito_notify_failure_logs_tito_err_without_webhook_url(monkeypatch, caplog):
+    import sys
+    import types
+
+    secret_url = 'https://discord.com/api/webhooks/123/SECRET-TOKEN-xyz'
+
+    async def failing_post_webhook(*args, **kwargs):
+        raise RuntimeError(f'post failed for {secret_url}')
+
+    fake_webhook = types.ModuleType('open_webui.utils.webhook')
+    fake_webhook.post_webhook = failing_post_webhook
+    monkeypatch.setitem(sys.modules, 'open_webui.utils.webhook', fake_webhook)
+    monkeypatch.setenv('TITO_DISCORD_WEBHOOK', secret_url)
+
+    with caplog.at_level('DEBUG'):
+        asyncio.run(tito.tito_notify('unique-notify-message-for-tito-err-test'))
+
+    assert re.search(r'TITO-ERR T\d{4}-[0-9a-f]{4} discord_notify RuntimeError post failed for <url>', caplog.text)
+    assert 'SECRET-TOKEN' not in caplog.text
+    assert 'discord.com' not in caplog.text

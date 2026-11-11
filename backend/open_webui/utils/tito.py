@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
+import secrets
 import time
 from collections import deque
 from datetime import date, datetime, timedelta, timezone
@@ -389,6 +391,20 @@ def tito_config_checks(config_values: dict) -> list[str]:
 
 log = logging.getLogger(__name__)
 
+
+def _tito_err(component: str, detail: str) -> str:
+    """Log one TITO-ERR line and return its code. ``detail`` must already be redacted."""
+    code = f'T{datetime.now(FRESNO_TZ):%H%M}-{secrets.token_hex(2)}'
+    log.error('TITO-ERR %s %s %s', code, component, detail)
+    return code
+
+
+def _redacted_exc(e: BaseException) -> str:
+    """Exception type plus message with any http(s) URL removed (URLs can carry webhook tokens)."""
+    message = re.sub(r'https?://\S+', '<url>', str(e)).replace('\n', ' ')
+    return f'{type(e).__name__} {message}'.strip()
+
+
 NOTIFY_DEDUPE_SECONDS = 600  # identical message within 10 min is dropped
 NOTIFY_MAX_PER_HOUR = 20  # global cap per rolling hour
 _notify_last_sent: dict[str, float] = {}
@@ -428,3 +444,4 @@ async def tito_notify(message: str, event_data: dict | None = None) -> None:
         if not isinstance(e, Exception):
             raise
         log.debug('Tito Discord notification failed (%s)', type(e).__name__)
+        _tito_err('discord_notify', _redacted_exc(e))
