@@ -785,11 +785,11 @@ def test_interject_expiry_after_24h(tmp_path):
     assert tito_interject.pop_notes('u1', now=now, path=p) == ['fresh']
 
 
-def test_interject_max_five_drops_oldest(tmp_path):
+def test_interject_max_fifty_drops_oldest(tmp_path):
     p = str(tmp_path / 'i.json')
-    for i in range(7):
+    for i in range(52):
         tito_interject.add_note('u1', f'n{i}', now=100.0 + i, path=p)
-    assert tito_interject.pop_notes('u1', now=200.0, path=p) == ['n2', 'n3', 'n4', 'n5', 'n6']
+    assert tito_interject.pop_notes('u1', now=200.0, path=p) == [f'n{i}' for i in range(2, 52)]
 
 
 def test_interject_clear_returns_count(tmp_path):
