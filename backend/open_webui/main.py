@@ -272,7 +272,7 @@ from open_webui.utils.models import (
 )
 from open_webui.utils.payload import apply_model_controls
 from open_webui.utils import tito
-from open_webui.utils.webhook import post_webhook
+from open_webui.utils.tito import tito_notify
 from open_webui.utils.oauth import (
     OAuthClientInformationFull,
     OAuthClientManager,
@@ -302,17 +302,6 @@ if SAFE_MODE:
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
-
-
-async def _tito_notify(message: str, event_data: dict | None = None) -> None:
-    """Best-effort Discord alert for Tito (env-gated, never raises)."""
-    url = os.getenv('TITO_DISCORD_WEBHOOK', '')
-    if not url:
-        return
-    try:
-        await post_webhook('open-webui', url, message, event_data or {})
-    except Exception:
-        log.debug('Tito Discord notification failed', exc_info=True)
 
 
 async def emit_chat_list_event(metadata: dict, chat_id: str):
@@ -545,7 +534,7 @@ async def lifespan(app: FastAPI):
         tito_model = app.state.MODELS.get(tito.TITO_MODEL_ID)
         if not tito_model or not tito_user or tito_user.role == 'admin':
             log.error('Tito self-check failed: model or non-admin user unavailable')
-            await _tito_notify('Tito self-check failed: model or non-admin user unavailable', {})
+            await tito_notify('Tito self-check failed: model or non-admin user unavailable', {})
         else:
             failures = tito.tito_model_checks(tito_model)
             if not await Config.get('memories.enable'):
@@ -604,7 +593,7 @@ async def lifespan(app: FastAPI):
 
             if failures:
                 log.error('Tito self-check failed: %s', failures)
-                await _tito_notify(f'Tito self-check failed: {failures}', {})
+                await tito_notify(f'Tito self-check failed: {failures}', {})
             else:
                 tools_file = os.getenv('TITO_TOOLS_FILE', '')
                 if tools_file:
@@ -621,7 +610,7 @@ async def lifespan(app: FastAPI):
                             fh.write(JSONCodec.dumps(payload))
                     except Exception:
                         log.exception('Tito self-check tool dump failed')
-                        await _tito_notify('Tito self-check failed: tool dump error', {})
+                        await tito_notify('Tito self-check failed: tool dump error', {})
                 log.info('Tito self-check passed (Tito up)')
 
     app.state.startup_complete = True

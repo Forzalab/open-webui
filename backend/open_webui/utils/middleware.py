@@ -85,7 +85,7 @@ from open_webui.tasks import append_response_stream, clear_response_stream, save
 from open_webui.utils.access_control import has_permission
 from open_webui.utils import tito
 from open_webui.utils.tito_weather import fetch_fresno_weather
-from open_webui.utils.webhook import post_webhook
+from open_webui.utils.tito import tito_notify
 from open_webui.utils.access_control.files import get_owner_accessible_folder_files
 from open_webui.utils.access_control.folders import has_folder_access
 from open_webui.utils.ask_user import stage_ask_user_tool_calls
@@ -191,18 +191,6 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
-
-
-async def _tito_notify(message: str, event_data: dict | None = None) -> None:
-    """Best-effort Discord alert for Tito failures (env-gated, never raises)."""
-    url = os.getenv('TITO_DISCORD_WEBHOOK', '')
-    if not url:
-        return
-    try:
-        await post_webhook('open-webui', url, message, event_data or {})
-    except Exception as e:
-        # Never log the exception text/traceback: it can embed the webhook URL.
-        log.debug('Tito Discord notification failed (%s)', type(e).__name__)
 
 
 async def _tito_last_chat_gap_hours(chat_id: str, user_message_id: str | None, user_id: str) -> int | None:
@@ -3073,7 +3061,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         chat_error = tito.tito_chat_error(chat, chat_id, is_new_chat=False)
         if chat_error:
             log.error('Tito chat guard failed: %s (chat_id=%s)', chat_error, chat_id)
-            await _tito_notify(f'Tito chat guard: {chat_error}', {'chat_id': chat_id})
+            await tito_notify(f'Tito chat guard: {chat_error}', {'chat_id': chat_id})
             raise HTTPException(
                 status_code=403 if chat_error == tito.TITO_TEMP_CHAT_ERROR else 404,
                 detail=chat_error,
@@ -3091,7 +3079,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             except Exception:
                 log.exception('Tito memory snapshot failed; using unavailable sentinel')
                 block1, block2 = tito.build_tito_blocks_unavailable(raw_system)
-                await _tito_notify('Tito memory snapshot failed', {'chat_id': chat_id})
+                await tito_notify('Tito memory snapshot failed', {'chat_id': chat_id})
             tito_system = tito.freeze_tito_system({}, block1, block2)['tito_system']
             if is_saved_chat_id(chat_id):
                 await Chats.update_chat_meta_by_id(chat_id, {'tito_system': tito_system})

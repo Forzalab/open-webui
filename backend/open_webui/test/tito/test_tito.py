@@ -387,27 +387,57 @@ def test_ensure_status_replays_stored_without_overwrite_or_duplicate():
     assert persist2 is None and out2 == expanded
 
 
+def _fake_webhook(monkeypatch, fn):
+    # The real module pulls config/env (heavy deps); tito_notify imports it lazily.
+    import sys
+
+    monkeypatch.setitem(sys.modules, 'open_webui.utils.webhook', SimpleNamespace(post_webhook=fn))
+
+
+def _reset_notify():
+    tito._notify_last_sent.clear()
+    tito._notify_sent_times.clear()
+
+
 def test_tito_notify_logs_no_webhook_url(monkeypatch, caplog):
     # N3: failure log must not contain the webhook URL.
-    import asyncio
     import logging
 
-    pytest = __import__('pytest')
-    try:
-        from open_webui.utils import middleware
-    except Exception as e:  # heavy import; skip if env lacks deps
-        pytest.skip(f'middleware not importable: {e}')
-
+    _reset_notify()
     secret = 'https://discord.com/api/webhooks/123/SECRETTOKEN'
     monkeypatch.setenv('TITO_DISCORD_WEBHOOK', secret)
 
     async def boom(*a, **k):
         raise RuntimeError(f'failed posting to {secret}')
 
-    monkeypatch.setattr(middleware, 'post_webhook', boom)
+    _fake_webhook(monkeypatch, boom)
     with caplog.at_level(logging.DEBUG):
-        asyncio.run(middleware._tito_notify('x'))
+        asyncio.run(tito.tito_notify('x'))
     assert 'SECRETTOKEN' not in caplog.text
+    assert 'RuntimeError' in caplog.text
+
+
+def test_tito_notify_drops_identical_message_within_window(monkeypatch):
+    _reset_notify()
+    monkeypatch.setenv('TITO_DISCORD_WEBHOOK', 'https://discord.com/api/webhooks/1/T')
+    sent = []
+
+    async def ok(name, url, message, data, *a, **k):
+        sent.append(message)
+        return True
+
+    _fake_webhook(monkeypatch, ok)
+    asyncio.run(tito.tito_notify('a'))
+    asyncio.run(tito.tito_notify('a'))
+    asyncio.run(tito.tito_notify('b'))
+    assert sent == ['a', 'b']
+
+
+def test_tito_notify_hourly_cap():
+    _reset_notify()
+    assert all(tito.notify_rate_ok(f'm{i}', now=100.0) for i in range(tito.NOTIFY_MAX_PER_HOUR))
+    assert tito.notify_rate_ok('extra', now=101.0) is False
+    assert tito.notify_rate_ok('extra', now=100.0 + 3600) is True  # window rolled
 
 
 # --- TASK A: last-chat gap in the hidden status ------------------------------
