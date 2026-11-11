@@ -12,6 +12,7 @@ No value is "because the spec says".
 import asyncio
 import hashlib
 import re
+import urllib.error
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -563,8 +564,8 @@ def test_build_status_computed_lines_when_variables_missing():
 def test_weather_line_only_when_given_and_before_last_chat():
     base = tito.build_tito_status({}, now=NOW_PST, last_chat_gap_hours=3)
     assert 'weather' not in base
-    s = tito.build_tito_status({}, now=NOW_PST, last_chat_gap_hours=3, weather='mưa, 58°F (thấp 50 cao 61)')
-    assert s == base.replace('last chat:', 'weather Fresno: mưa, 58°F (thấp 50 cao 61)\nlast chat:')
+    s = tito.build_tito_status({}, now=NOW_PST, last_chat_gap_hours=3, weather='mưa, 14°C (thấp 10 cao 16)')
+    assert s == base.replace('last chat:', 'weather Fresno: mưa, 14°C (thấp 10 cao 16)\nlast chat:')
 
 
 def test_has_stored_status_detects_replay_on_newest_user_message():
@@ -606,10 +607,16 @@ def test_weather_code_to_vietnamese_word(code, word):
 
 def test_format_weather_rounds_and_formats():
     data = {
-        'current': {'temperature_2m': 57.6, 'weather_code': 61},
-        'daily': {'temperature_2m_max': [61.2], 'temperature_2m_min': [49.9]},
+        'current': {'temperature_2m': 14.4, 'weather_code': 61},
+        'daily': {'temperature_2m_max': [16.2], 'temperature_2m_min': [9.6]},
     }
-    assert tito_weather.format_weather(data) == 'mưa, 58°F (thấp 50 cao 61)'
+    assert tito_weather.format_weather(data) == 'mưa, 14°C (thấp 10 cao 16)'
+
+
+def test_weather_url_asks_celsius():
+    # Tony 2026-11-11: temperature is always Celsius for the parents.
+    assert 'temperature_unit=celsius' in tito_weather.WEATHER_URL
+    assert 'fahrenheit' not in tito_weather.WEATHER_URL
 
 
 class _FakeResp:
@@ -643,11 +650,11 @@ class _FakeSession:
 
 def test_fetch_weather_success_returns_text():
     body = {
-        'current': {'temperature_2m': 58, 'weather_code': 61},
-        'daily': {'temperature_2m_max': [61], 'temperature_2m_min': [50]},
+        'current': {'temperature_2m': 14, 'weather_code': 61},
+        'daily': {'temperature_2m_max': [16], 'temperature_2m_min': [10]},
     }
     result = asyncio.run(tito_weather.fetch_fresno_weather(lambda: _FakeSession(_FakeResp(200, body))))
-    assert result == 'mưa, 58°F (thấp 50 cao 61)'
+    assert result == 'mưa, 14°C (thấp 10 cao 16)'
 
 
 def test_fetch_weather_exception_returns_none_and_logs_without_url(caplog):
@@ -671,3 +678,67 @@ def test_fetch_weather_http_error_returns_none_and_logs_status(caplog):
 def test_fetch_weather_malformed_payload_returns_none():
     result = asyncio.run(tito_weather.fetch_fresno_weather(lambda: _FakeSession(_FakeResp(200, {'x': 1}))))
     assert result is None
+
+
+# --- TITO-ERR codes: places tool (standalone file) + tito_notify -------------
+
+_PLACES_KEY = 'AIza-TEST-KEY-do-not-leak-1234'
+
+
+def _load_places_tool():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[4] / 'tito-deploy' / 'tools' / 'places.py'
+    spec = importlib.util.spec_from_file_location('places_tool_under_test', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize(
+    'failure, expected_detail',
+    [
+        (lambda: urllib.error.HTTPError('https://places.googleapis.com/x', 500, 'boom', {}, None), '500'),
+        (lambda: TimeoutError('timed out'), 'timeout'),
+        (lambda: RuntimeError(f'boom {_PLACES_KEY} https://places.googleapis.com/v1'), 'RuntimeError'),
+    ],
+)
+def test_places_failure_logs_tito_err_and_returns_code(monkeypatch, caplog, failure, expected_detail):
+    places = _load_places_tool()
+    monkeypatch.setenv('TITO_PLACES_API_KEY', _PLACES_KEY)
+
+    def fake_urlopen(*args, **kwargs):
+        raise failure()
+
+    monkeypatch.setattr(places.urllib.request, 'urlopen', fake_urlopen)
+    with caplog.at_level('ERROR'):
+        result = asyncio.run(places.Tools().search_places('pharmacy'))
+
+    assert re.search(rf'TITO-ERR T\d{{4}}-[0-9a-f]{{4}} places {re.escape(expected_detail)}', caplog.text)
+    assert 'mã lỗi T' in result
+    assert _PLACES_KEY not in caplog.text
+    assert _PLACES_KEY not in result
+    assert 'places.googleapis' not in caplog.text
+
+
+def test_tito_notify_failure_logs_tito_err_without_webhook_url(monkeypatch, caplog):
+    import sys
+    import types
+
+    secret_url = 'https://discord.com/api/webhooks/123/SECRET-TOKEN-xyz'
+
+    async def failing_post_webhook(*args, **kwargs):
+        raise RuntimeError(f'post failed for {secret_url}')
+
+    fake_webhook = types.ModuleType('open_webui.utils.webhook')
+    fake_webhook.post_webhook = failing_post_webhook
+    monkeypatch.setitem(sys.modules, 'open_webui.utils.webhook', fake_webhook)
+    monkeypatch.setenv('TITO_DISCORD_WEBHOOK', secret_url)
+
+    with caplog.at_level('DEBUG'):
+        asyncio.run(tito.tito_notify('unique-notify-message-for-tito-err-test'))
+
+    assert re.search(r'TITO-ERR T\d{4}-[0-9a-f]{4} discord_notify RuntimeError post failed for <url>', caplog.text)
+    assert 'SECRET-TOKEN' not in caplog.text
+    assert 'discord.com' not in caplog.text

@@ -9,8 +9,11 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import urllib.error
 import urllib.request
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 
@@ -27,6 +30,18 @@ logger = logging.getLogger(__name__)
 NO_KEY = 'Chưa có khóa Places API nên chưa tìm được địa điểm.'
 HTTP_ERROR = 'Chưa tìm được địa điểm (mã {code}).'
 NONE_FOUND = 'Không tìm thấy địa điểm nào.'
+
+
+def _incident(detail: str) -> str:
+    """Log one TITO-ERR line and return its code (detail: status, 'timeout' or exception type only)."""
+    code = f'T{datetime.now(ZoneInfo("America/Los_Angeles")):%H%M}-{secrets.token_hex(2)}'
+    logger.error('TITO-ERR %s places %s', code, detail)
+    return code
+
+
+def _error(shown: object, code: str) -> str:
+    """User-facing error text; appends the TITO-ERR code so a parent's report can be matched to the log."""
+    return HTTP_ERROR.format(code=shown) + f' (mã lỗi {code})'
 
 
 def _log_call(details: bool, results: int, ok: int) -> None:
@@ -99,15 +114,15 @@ class Tools:
             data = await asyncio.to_thread(_post_search, key, body, field_mask)
         except urllib.error.HTTPError as e:
             _log_call(details, 0, 0)
-            return HTTP_ERROR.format(code=e.code)
+            return _error(e.code, _incident(str(e.code)))
         except TimeoutError:
             _log_call(details, 0, 0)
-            return HTTP_ERROR.format(code='timeout')
+            return _error('timeout', _incident('timeout'))
         except Exception as e:
             _log_call(details, 0, 0)
             if isinstance(getattr(e, 'reason', None), TimeoutError):
-                return HTTP_ERROR.format(code='timeout')
-            return HTTP_ERROR.format(code='mạng')
+                return _error('timeout', _incident('timeout'))
+            return _error('mạng', _incident(type(e).__name__))
 
         places = data.get('places') if isinstance(data, dict) else None
         count = sum(1 for place in (places or [])[:MAX_RESULTS] if isinstance(place, dict))
