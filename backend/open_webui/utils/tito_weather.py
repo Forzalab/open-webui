@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 WEATHER_URL = (
     'https://api.open-meteo.com/v1/forecast?latitude=36.7378&longitude=-119.7871'
     '&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min'
-    '&temperature_unit=fahrenheit&timezone=America%2FLos_Angeles&forecast_days=1'
+    '&temperature_unit=celsius&timezone=America%2FLos_Angeles&forecast_days=1'
 )
 WEATHER_TIMEOUT_SECONDS = 3
 _FRESNO_TZ = ZoneInfo('America/Los_Angeles')
@@ -48,14 +48,14 @@ def weather_word(code: int) -> str:
 
 
 def format_weather(data: dict) -> str:
-    """e.g. ``mưa, 58°F (thấp 50 cao 61)``. Raises on a malformed payload."""
+    """e.g. ``mưa, 14°C (thấp 10 cao 16)``. Raises on a malformed payload."""
     current = data['current']
     daily = data['daily']
     word = weather_word(int(current['weather_code']))
-    now_f = round(current['temperature_2m'])
+    now_c = round(current['temperature_2m'])
     low = round(daily['temperature_2m_min'][0])
     high = round(daily['temperature_2m_max'][0])
-    return f'{word}, {now_f}°F (thấp {low} cao {high})'
+    return f'{word}, {now_c}°C (thấp {low} cao {high})'
 
 
 def _log_error(detail: str) -> None:

@@ -564,8 +564,8 @@ def test_build_status_computed_lines_when_variables_missing():
 def test_weather_line_only_when_given_and_before_last_chat():
     base = tito.build_tito_status({}, now=NOW_PST, last_chat_gap_hours=3)
     assert 'weather' not in base
-    s = tito.build_tito_status({}, now=NOW_PST, last_chat_gap_hours=3, weather='mưa, 58°F (thấp 50 cao 61)')
-    assert s == base.replace('last chat:', 'weather Fresno: mưa, 58°F (thấp 50 cao 61)\nlast chat:')
+    s = tito.build_tito_status({}, now=NOW_PST, last_chat_gap_hours=3, weather='mưa, 14°C (thấp 10 cao 16)')
+    assert s == base.replace('last chat:', 'weather Fresno: mưa, 14°C (thấp 10 cao 16)\nlast chat:')
 
 
 def test_has_stored_status_detects_replay_on_newest_user_message():
@@ -607,10 +607,16 @@ def test_weather_code_to_vietnamese_word(code, word):
 
 def test_format_weather_rounds_and_formats():
     data = {
-        'current': {'temperature_2m': 57.6, 'weather_code': 61},
-        'daily': {'temperature_2m_max': [61.2], 'temperature_2m_min': [49.9]},
+        'current': {'temperature_2m': 14.4, 'weather_code': 61},
+        'daily': {'temperature_2m_max': [16.2], 'temperature_2m_min': [9.6]},
     }
-    assert tito_weather.format_weather(data) == 'mưa, 58°F (thấp 50 cao 61)'
+    assert tito_weather.format_weather(data) == 'mưa, 14°C (thấp 10 cao 16)'
+
+
+def test_weather_url_asks_celsius():
+    # Tony 2026-11-11: temperature is always Celsius for the parents.
+    assert 'temperature_unit=celsius' in tito_weather.WEATHER_URL
+    assert 'fahrenheit' not in tito_weather.WEATHER_URL
 
 
 class _FakeResp:
@@ -644,11 +650,11 @@ class _FakeSession:
 
 def test_fetch_weather_success_returns_text():
     body = {
-        'current': {'temperature_2m': 58, 'weather_code': 61},
-        'daily': {'temperature_2m_max': [61], 'temperature_2m_min': [50]},
+        'current': {'temperature_2m': 14, 'weather_code': 61},
+        'daily': {'temperature_2m_max': [16], 'temperature_2m_min': [10]},
     }
     result = asyncio.run(tito_weather.fetch_fresno_weather(lambda: _FakeSession(_FakeResp(200, body))))
-    assert result == 'mưa, 58°F (thấp 50 cao 61)'
+    assert result == 'mưa, 14°C (thấp 10 cao 16)'
 
 
 def test_fetch_weather_exception_returns_none_and_logs_without_url(caplog):
