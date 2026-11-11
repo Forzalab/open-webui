@@ -8,6 +8,10 @@ config, or env imports so its functions remain unit-testable without a live app.
 from __future__ import annotations
 
 import hashlib
+import logging
+import os
+import time
+from collections import deque
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -379,3 +383,48 @@ def tito_config_checks(config_values: dict) -> list[str]:
         if config_values.get(key):
             fails.append(f'{key} must be disabled')
     return fails
+
+
+# --- Discord alerts: redacted + rate limited ---------------------------------
+
+log = logging.getLogger(__name__)
+
+NOTIFY_DEDUPE_SECONDS = 600  # identical message within 10 min is dropped
+NOTIFY_MAX_PER_HOUR = 20  # global cap per rolling hour
+_notify_last_sent: dict[str, float] = {}
+_notify_sent_times: deque = deque()
+
+
+def notify_rate_ok(message: str, now: float | None = None) -> bool:
+    """In-process limiter: True (and records the send) if this alert may go out."""
+    now = time.monotonic() if now is None else now
+    while _notify_sent_times and now - _notify_sent_times[0] >= 3600:
+        _notify_sent_times.popleft()
+    for key in [k for k, t in _notify_last_sent.items() if now - t >= NOTIFY_DEDUPE_SECONDS]:
+        del _notify_last_sent[key]
+    if message in _notify_last_sent or len(_notify_sent_times) >= NOTIFY_MAX_PER_HOUR:
+        return False
+    _notify_last_sent[message] = now
+    _notify_sent_times.append(now)
+    return True
+
+
+async def tito_notify(message: str, event_data: dict | None = None) -> None:
+    """Best-effort Discord alert for Tito (env-gated, rate limited, never raises).
+
+    Logs never carry the webhook URL: only the exception type is logged.
+    """
+    try:
+        url = os.getenv('TITO_DISCORD_WEBHOOK', '')
+        if not url:
+            return
+        if not notify_rate_ok(message):
+            log.debug('Tito Discord notification dropped (rate limit)')
+            return
+        from open_webui.utils.webhook import post_webhook  # lazy: pulls config/env
+
+        await post_webhook('open-webui', url, message, event_data or {})
+    except BaseException as e:
+        if not isinstance(e, Exception):
+            raise
+        log.debug('Tito Discord notification failed (%s)', type(e).__name__)

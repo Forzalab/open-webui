@@ -29,13 +29,13 @@ def _event_text(message: str, description: str | None = None, event_data: dict |
 
 async def post_webhook(name: str, url: str, message: str, event_data: dict, description: str | None = None) -> bool:
     try:
-        log.debug('post_webhook: %s, %s, %s', url, message, event_data)
+        log.debug('post_webhook: %s, %s', message, event_data)
         # Block private-IP / loopback / cloud-metadata targets — the URL is
         # caller-controlled (user notification settings under
         # ENABLE_USER_WEBHOOKS, automation notification triggers).
         await asyncio.to_thread(validate_url, url)
     except Exception as e:
-        log.warning('Webhook skipped, URL invalid or not publicly resolvable: %s', e)
+        log.warning('Webhook skipped, URL invalid or not publicly resolvable (%s)', type(e).__name__)
         return False
 
     try:
@@ -99,5 +99,6 @@ async def post_webhook(name: str, url: str, message: str, event_data: dict, desc
 
         return True
     except Exception as e:
-        log.exception(e)
+        # Exception text/traceback can embed the webhook URL (token): log the type only.
+        log.warning('Webhook post failed (%s)', type(e).__name__)
         return False
