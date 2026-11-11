@@ -7,6 +7,7 @@ description: Tìm địa điểm gần Fresno/Clovis qua Google Places API (New)
 
 import asyncio
 import json
+import logging
 import os
 import urllib.error
 import urllib.request
@@ -21,9 +22,17 @@ FIELDS_DETAILS = ',places.rating,places.currentOpeningHours.weekdayDescriptions'
 TIMEOUT_SECONDS = 10
 MAX_RESULTS = 5
 
+logger = logging.getLogger(__name__)
+
 NO_KEY = 'Chưa có khóa Places API nên chưa tìm được địa điểm.'
 HTTP_ERROR = 'Chưa tìm được địa điểm (mã {code}).'
 NONE_FOUND = 'Không tìm thấy địa điểm nào.'
+
+
+def _log_call(details: bool, results: int, ok: int) -> None:
+    """One counting line per call. Only tier/results/ok: never query, near, key, URL or body."""
+    tier = 'enterprise' if details else 'pro'
+    logger.info('[TITO] places tier=%s results=%d ok=%d', tier, results, ok)
 
 
 def _post_search(key: str, body: dict, field_mask: str) -> dict:
@@ -81,6 +90,7 @@ class Tools:
         # Read at call time; the key is never stored, logged or returned.
         key = os.getenv('TITO_PLACES_API_KEY', '').strip()
         if not key:
+            _log_call(details, 0, 0)
             return NO_KEY
 
         field_mask = FIELDS_BASE + (FIELDS_DETAILS if details else '')
@@ -88,12 +98,18 @@ class Tools:
         try:
             data = await asyncio.to_thread(_post_search, key, body, field_mask)
         except urllib.error.HTTPError as e:
+            _log_call(details, 0, 0)
             return HTTP_ERROR.format(code=e.code)
         except TimeoutError:
+            _log_call(details, 0, 0)
             return HTTP_ERROR.format(code='timeout')
         except Exception as e:
+            _log_call(details, 0, 0)
             if isinstance(getattr(e, 'reason', None), TimeoutError):
                 return HTTP_ERROR.format(code='timeout')
             return HTTP_ERROR.format(code='mạng')
 
-        return _format(data.get('places') if isinstance(data, dict) else None, details)
+        places = data.get('places') if isinstance(data, dict) else None
+        count = sum(1 for place in (places or [])[:MAX_RESULTS] if isinstance(place, dict))
+        _log_call(details, count, 1)
+        return _format(places, details)

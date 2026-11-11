@@ -10,6 +10,7 @@ import asyncio
 import importlib.util
 import io
 import json
+import logging
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -114,3 +115,28 @@ def test_key_never_appears_in_returned_text(monkeypatch):
     out = asyncio.run(module.Tools().search_places('chợ'))
     assert out == 'Chưa tìm được địa điểm (mã 403).'
     assert KEY not in out
+
+
+def test_log_line_counts_pro_call_without_query(monkeypatch, caplog):
+    # SOURCE: brief PLOG - one [TITO] line per call, tier=pro, query text never logged.
+    monkeypatch.setenv('TITO_PLACES_API_KEY', KEY)
+    _patch_http(monkeypatch)
+    with caplog.at_level(logging.INFO):
+        asyncio.run(module.Tools().search_places('PRIVQUERY-xyz'))
+
+    lines = [r.getMessage() for r in caplog.records if '[TITO]' in r.getMessage()]
+    assert lines == ['[TITO] places tier=pro results=1 ok=1']
+    assert 'PRIVQUERY' not in caplog.text
+
+
+def test_log_line_marks_enterprise_and_error(monkeypatch, caplog):
+    # SOURCE: brief PLOG - details=True logs tier=enterprise; HTTP error logs ok=0 results=0.
+    monkeypatch.setenv('TITO_PLACES_API_KEY', KEY)
+    err = urllib.error.HTTPError(module.SEARCH_URL, 500, 'Boom', {}, io.BytesIO(b''))
+    _patch_http(monkeypatch, error=err)
+    with caplog.at_level(logging.INFO):
+        asyncio.run(module.Tools().search_places('PRIVQUERY-xyz', details=True))
+
+    lines = [r.getMessage() for r in caplog.records if '[TITO]' in r.getMessage()]
+    assert lines == ['[TITO] places tier=enterprise results=0 ok=0']
+    assert 'PRIVQUERY' not in caplog.text
