@@ -180,11 +180,9 @@ async def process_uploaded_file(
                     content_extraction_engine, content_extraction_supported_media_mime_types, content_type
                 )
             ):
-                if content_type.startswith('video/'):
-                    # Keep videos for multimodal processing; text extraction can time out detecting their encoding.
-                    log.info('Video file detected (%s), skipping text extraction', content_type)
-                else:
-                    raise Exception(f'File type {content_type} is not supported for processing')
+                # Tito: images go to the model as images (vision); no text extraction needed.
+                # Raising here marked the file 'failed' and Conduit spun forever (T13).
+                log.info('Media file detected (%s), skipping text extraction', content_type)
 
             else:
                 # Documents, or media files explicitly enabled for the
@@ -354,6 +352,13 @@ async def upload_file_handler(
         file_extension = os.path.splitext(filename)[1]
         # Remove the leading dot from the file extension and lowercase it
         file_extension = file_extension[1:].lower() if file_extension else ''
+
+        # Tito: no video uploads (T13). Reject up front so clients show an error instead of hanging.
+        if (file.content_type or '').startswith('video/'):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=ERROR_MESSAGES.DEFAULT('Video files are not supported'),
+            )
 
         allowed_file_extensions = await Config.get('rag.file.allowed_extensions')
         if process and allowed_file_extensions:
