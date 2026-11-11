@@ -5,9 +5,7 @@ services:
     mem_limit: 4g
     expose:
       - "8080"
-    # edge (tito-edge GCP) reaches owui over WireGuard only; wg-only bind, not public.
-    ports:
-      - "10.77.0.2:8080:8080"
+    # No host port: box Caddy reaches owui:8080 on the docker network. (wg edge bind removed 2026-11-11, edge deleted.)
     # TODO(B4): re-add depends_on calendar-mcp service_healthy once Apps Script is deployed.
     volumes:
       - owui-data:/app/backend/data
