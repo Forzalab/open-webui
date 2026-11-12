@@ -1,0 +1,9 @@
+[Unit]
+Description=Tito Postgres nightly backup (11:30 UTC = 03:30 Pacific winter)
+
+[Timer]
+OnCalendar=*-*-* 11:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,8 +1,36 @@
 services:
+  postgres:
+    # Pinned; box already has this exact tag. Reachable only on the docker network (no host port).
+    image: postgres:17.11
+    restart: unless-stopped
+    mem_limit: 1g
+    shm_size: 256m
+    stop_grace_period: 60s
+    expose:
+      - "5432"
+    environment:
+      POSTGRES_DB: tito
+      POSTGRES_USER: tito
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    command: ["postgres", "-c", "shared_buffers=256MB", "-c", "effective_cache_size=1GB", "-c", "work_mem=8MB", "-c", "maintenance_work_mem=128MB", "-c", "max_connections=40", "-c", "wal_compression=on", "-c", "max_wal_size=1GB"]
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - /opt/tito/backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tito -d tito"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   owui:
     image: ghcr.io/forzalab/open-webui:${TITO_IMAGE_TAG:-tito}
     restart: unless-stopped
     mem_limit: 4g
+    depends_on:
+      postgres:
+        condition: service_healthy
     expose:
       - "8080"
     # No host port: box Caddy reaches owui:8080 on the docker network. (wg edge bind removed 2026-11-11, edge deleted.)
@@ -11,6 +39,11 @@ services:
       - owui-data:/app/backend/data
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      # Pool: 2 engines (sync + async) x (5+5) <= 20 conns, under postgres max_connections=40.
+      DATABASE_POOL_SIZE: "5"
+      DATABASE_POOL_MAX_OVERFLOW: "5"
+      DATABASE_POOL_TIMEOUT: "30"
+      DATABASE_POOL_RECYCLE: "1800"
       WEBUI_URL: https://${TITO_DOMAIN}
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY}
       ENABLE_OAUTH_SIGNUP: "false"
@@ -176,6 +209,7 @@ services:
       - caddy-config:/config
 
 volumes:
+  pg-data:
   owui-data:
   caddy-data:
   caddy-config:

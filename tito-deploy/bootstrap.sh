@@ -80,7 +80,18 @@ fi
 if grep -qE '^WEBUI_SECRET_KEY=$' "$ENV_FILE"; then
   sed -i "s|^WEBUI_SECRET_KEY=$|WEBUI_SECRET_KEY=$(openssl rand -hex 32)|" "$ENV_FILE"
 fi
+
+# 6c. Auto-generate POSTGRES_PASSWORD if missing or empty (never printed). Does NOT touch DATABASE_URL:
+# the Neon -> local cutover is a separate, deliberate step (tito-deploy/db/cutover.md).
+if ! grep -qE '^POSTGRES_PASSWORD=.+' "$ENV_FILE"; then
+  sed -i '/^POSTGRES_PASSWORD=/d' "$ENV_FILE"
+  echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)" >> "$ENV_FILE"
+fi
 chmod 600 "$ENV_FILE"
+
+# 6d. Backup dir (bind-mounted into postgres as /backups), root-only.
+mkdir -p /opt/tito/backups/nightly
+chmod 700 /opt/tito/backups /opt/tito/backups/nightly
 
 # 7. Required vars must be non-empty.
 REQUIRED="DATABASE_URL WEBUI_SECRET_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET ANTHROPIC_API_KEY"
@@ -95,7 +106,13 @@ if [ -n "$missing" ]; then
 fi
 
 # 8. Pull the image (built by GitHub Actions), then start/update.
-docker compose -f "$REPO/tito-deploy/docker-compose.yml" --env-file "$ENV_FILE" pull owui
+docker compose -f "$REPO/tito-deploy/docker-compose.yml" --env-file "$ENV_FILE" pull owui postgres
 docker compose -f "$REPO/tito-deploy/docker-compose.yml" --env-file "$ENV_FILE" up -d
 # Caddyfile is a single-file bind mount; git swaps the inode, so recreate caddy to pick up edits.
 docker compose -f "$REPO/tito-deploy/docker-compose.yml" --env-file "$ENV_FILE" up -d --force-recreate --no-deps caddy
+
+# 9. Nightly Postgres backup timer (script: db/backup.sh).
+chmod +x "$REPO/tito-deploy/db/backup.sh" "$REPO/tito-deploy/db/pg-verify.sh"
+install -m 0644 "$REPO/tito-deploy/db/tito-pg-backup.service" "$REPO/tito-deploy/db/tito-pg-backup.timer" /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now tito-pg-backup.timer
