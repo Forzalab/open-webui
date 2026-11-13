@@ -2,6 +2,17 @@
 # up: pull the newest tito commit + image, restart OWUI. No params.
 # Install once: curl -fsSL https://raw.githubusercontent.com/Forzalab/open-webui/tito/tito-deploy/up -o ~/.local/bin/up && chmod +x ~/.local/bin/up
 set -e
+# Sort /opt/tito/.env by key (comments on top, KEY= lines LC_ALL=C sorted, blank lines dropped).
+# Skipped when any non-blank line is neither a comment nor KEY=..., so nothing is ever lost.
+E=/opt/tito/.env
+if sudo test -f "$E"; then
+  T=$(mktemp); chmod 600 "$T"
+  { sudo grep -E '^[[:space:]]*#' "$E" || true; sudo grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$E" | LC_ALL=C sort || true; } > "$T"
+  if [ "$(sudo grep -cv '^[[:space:]]*$' "$E")" = "$(wc -l < "$T")" ]; then
+    sudo cp -p "$E" "$E.bak-presort" && sudo cp "$T" "$E" && sudo chmod 600 "$E"
+  else echo "up: .env sort skipped (line count mismatch)"; fi
+  rm -f "$T"
+fi
 curl -fsSL "https://raw.githubusercontent.com/Forzalab/open-webui/tito/tito-deploy/bootstrap.sh?$(date +%s)" | sudo bash
 C=/opt/tito/open-webui/tito-deploy/docker-compose.yml
 echo "commit: $(git -C /opt/tito/open-webui log --oneline -1)"

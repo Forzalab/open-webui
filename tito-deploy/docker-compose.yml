@@ -69,6 +69,8 @@ services:
       TITO_SOFT_CAP_USD: "30"
       TITO_HARD_CAP_USD: "35"
       TITO_PLACES_API_KEY: ${TITO_PLACES_API_KEY:-}
+      # Pipe 0.11.9+ reads this when the TITO_DECIDE_KEY valve is empty (OpenRouter, decide step).
+      TITO_DECIDE_KEY: ${TITO_DECIDE_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       # --- Tito settings sweep (2026-11-10) ---
       WEBUI_NAME: "Tito"
