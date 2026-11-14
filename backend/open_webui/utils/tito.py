@@ -56,13 +56,41 @@ VN_LUNAR_HOLIDAYS = {
 TITO_TEMP_CHAT_ERROR = 'Tito không hỗ trợ trò chuyện tạm thời. Vui lòng tạo một cuộc trò chuyện đã lưu.'
 TITO_NO_CHAT_ERROR = 'Không tìm thấy cuộc trò chuyện. Vui lòng tạo cuộc trò chuyện mới.'
 
+# Per-model profiles. 'tito' keeps the values above byte-for-byte; 'mimi' is the
+# AI-friend sibling that shares the same stack (frozen system, memory, guard, tools).
+TITO_PROFILES = {
+    'tito': {
+        'label': 'Tito',
+        'snapshot_heading': SNAPSHOT_HEADING,
+        'temp_chat_error': TITO_TEMP_CHAT_ERROR,
+        'no_chat_error': TITO_NO_CHAT_ERROR,
+    },
+    'mimi': {
+        'label': 'Mimi',
+        'snapshot_heading': 'NHỮNG ĐIỀU MIMI NHỚ VỀ BẠN',
+        'temp_chat_error': 'Mimi chưa hỗ trợ trò chuyện tạm thời. Bạn tạo một cuộc trò chuyện đã lưu nha.',
+        'no_chat_error': 'Không tìm thấy cuộc trò chuyện. Bạn tạo cuộc trò chuyện mới nha.',
+    },
+}
+
 
 def sha256_hex(text: str) -> str:
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
+def tito_profile(model_or_id) -> dict | None:
+    """Profile for a model dict or model id string; ``None`` for any non-Tito model."""
+    if isinstance(model_or_id, dict):
+        model_id = model_or_id.get('id')
+    else:
+        model_id = model_or_id
+    if not isinstance(model_id, str):
+        return None
+    return TITO_PROFILES.get(model_id)
+
+
 def is_tito_model(model: dict) -> bool:
-    return bool(model) and model.get('id') == TITO_MODEL_ID
+    return bool(model) and tito_profile(model) is not None
 
 
 def tito_model_tool_ids(model: dict | None) -> list[str]:
@@ -105,15 +133,15 @@ def build_memory_snapshot(memories: list) -> str:
     return '\n'.join(lines)
 
 
-def build_tito_blocks(prompt_raw: str | None, memories: list) -> tuple[str, str]:
+def build_tito_blocks(prompt_raw: str | None, memories: list, heading: str = SNAPSHOT_HEADING) -> tuple[str, str]:
     block1 = prompt_raw or ''
-    block2 = f'{SNAPSHOT_HEADING}\n{build_memory_snapshot(memories)}'
+    block2 = f'{heading}\n{build_memory_snapshot(memories)}'
     return block1, block2
 
 
-def build_tito_blocks_unavailable(prompt_raw: str | None) -> tuple[str, str]:
+def build_tito_blocks_unavailable(prompt_raw: str | None, heading: str = SNAPSHOT_HEADING) -> tuple[str, str]:
     block1 = prompt_raw or ''
-    block2 = f'{SNAPSHOT_HEADING}\n{MEMORY_UNAVAILABLE_SENTINEL}'
+    block2 = f'{heading}\n{MEMORY_UNAVAILABLE_SENTINEL}'
     return block1, block2
 
 
@@ -331,11 +359,12 @@ def ensure_tito_status(messages: list[dict], status_text: str) -> tuple[list[dic
     return messages, None
 
 
-def tito_chat_error(chat, chat_id: str, is_new_chat: bool = False) -> str | None:
+def tito_chat_error(chat, chat_id: str, is_new_chat: bool = False, profile: dict | None = None) -> str | None:
+    profile = profile or TITO_PROFILES[TITO_MODEL_ID]
     if is_temporary_chat_id(chat_id):
-        return TITO_TEMP_CHAT_ERROR
+        return profile['temp_chat_error']
     if chat is None and not is_new_chat:
-        return TITO_NO_CHAT_ERROR
+        return profile['no_chat_error']
     return None
 
 

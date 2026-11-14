@@ -1200,7 +1200,7 @@ async def _set_direct_model(request: Request, model_item: dict, user) -> None:
 
 def apply_tito_lock(form_data: dict, model_id, user, model: dict | None = None) -> None:
     """Force the server-side Tito configuration, ignoring client UI state."""
-    if model_id != tito.TITO_MODEL_ID:
+    if tito.tito_profile(model_id) is None:
         return
 
     # Ignored client inputs (stripped wholesale).
@@ -1438,7 +1438,7 @@ async def chat_completion(
             'internal': getattr(request.state, 'internal', False) is True,
             'chat_id': chat_id,
             'tito_raw_system': (model_info.params.model_dump() or {}).get('system')
-            if model_id == tito.TITO_MODEL_ID and model_info
+            if tito.tito_profile(model_id) is not None and model_info
             else None,
             'user_message': user_message,
             'user_message_id': user_message.get('id') if user_message else None,
