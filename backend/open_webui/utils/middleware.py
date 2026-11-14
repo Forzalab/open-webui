@@ -3058,13 +3058,14 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         metadata['initial_output'] = initial_output
 
     if is_tito:
+        tito_prof = tito.tito_profile(model)
         chat_id = metadata.get('chat_id')
-        chat_error = tito.tito_chat_error(chat, chat_id, is_new_chat=False)
+        chat_error = tito.tito_chat_error(chat, chat_id, is_new_chat=False, profile=tito_prof)
         if chat_error:
-            log.error('Tito chat guard failed: %s (chat_id=%s)', chat_error, chat_id)
-            await tito_notify(f'Tito chat guard: {chat_error}', {'chat_id': chat_id})
+            log.error('%s chat guard failed: %s (chat_id=%s)', tito_prof['label'], chat_error, chat_id)
+            await tito_notify(f'{tito_prof["label"]} chat guard: {chat_error}', {'chat_id': chat_id})
             raise HTTPException(
-                status_code=403 if chat_error == tito.TITO_TEMP_CHAT_ERROR else 404,
+                status_code=403 if chat_error == tito_prof['temp_chat_error'] else 404,
                 detail=chat_error,
             )
 
@@ -3076,11 +3077,11 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 memories = await Memories.get_memories_by_user_id(user.id)
                 if memories is None:
                     raise Exception('Memories.get_memories_by_user_id returned None')
-                block1, block2 = tito.build_tito_blocks(raw_system, memories)
+                block1, block2 = tito.build_tito_blocks(raw_system, memories, heading=tito_prof['snapshot_heading'])
             except Exception:
-                log.exception('Tito memory snapshot failed; using unavailable sentinel')
-                block1, block2 = tito.build_tito_blocks_unavailable(raw_system)
-                await tito_notify('Tito memory snapshot failed', {'chat_id': chat_id})
+                log.exception('%s memory snapshot failed; using unavailable sentinel', tito_prof['label'])
+                block1, block2 = tito.build_tito_blocks_unavailable(raw_system, heading=tito_prof['snapshot_heading'])
+                await tito_notify(f'{tito_prof["label"]} memory snapshot failed', {'chat_id': chat_id})
             tito_system = tito.freeze_tito_system({}, block1, block2)['tito_system']
             if is_saved_chat_id(chat_id):
                 await Chats.update_chat_meta_by_id(chat_id, {'tito_system': tito_system})
