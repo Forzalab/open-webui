@@ -92,7 +92,11 @@ services:
       UVICORN_WORKERS: "1"
       WEBHOOK_URL: ${TITO_DISCORD_WEBHOOK}
       ENABLE_OLLAMA_API: "false"
-      ENABLE_OPENAI_API: "false"
+      # Google AI Studio (OpenAI-compatible) serves only the title/task model; key comes from /opt/tito/.env.
+      ENABLE_OPENAI_API: "true"
+      OPENAI_API_BASE_URLS: "https://generativelanguage.googleapis.com/v1beta/openai"
+      OPENAI_API_KEYS: "${GOOGLE_AI_STUDIO_KEY:-}"
+      OPENAI_API_CONFIGS: '{"0":{"enable":true,"model_ids":["gemini-3.1-flash-lite"]}}'
       ENABLE_DIRECT_CONNECTIONS: "false"
       ENABLE_DIRECT_INTEGRATIONS: "false"
       ENABLE_WEB_SEARCH: "false"
@@ -121,7 +125,8 @@ services:
       DEFAULT_MODEL_PARAMS: '{"function_calling":"native","max_tokens":16000}'
       DEFAULT_MODEL_METADATA: '{"capabilities":{"file_context":false,"web_search":false,"image_generation":false,"code_interpreter":false,"usage":true,"memory":true},"builtinTools":{"memory":true,"files":true,"time":false,"user_input":false,"chats":false,"notes":false,"knowledge":false,"channels":false,"notifications":false,"web_search":false,"image_generation":false,"code_interpreter":false,"tasks":false,"automations":false,"calendar":false,"subagents":false,"skills":false,"tools":false}}'
       ENABLE_TITLE_GENERATION: "true"
-      TASK_MODEL_EXTERNAL: "anthropic.anthropic/claude-haiku-5-5"
+      TASK_MODEL: "gemini-3.1-flash-lite"
+      TASK_MODEL_EXTERNAL: "gemini-3.1-flash-lite"
       ENABLE_MEMORIES: "true"
       ENABLE_MEMORY_SYSTEM_CONTEXT: "false"
       ENABLE_MEMORY_BACKGROUND_REVIEW: "false"
