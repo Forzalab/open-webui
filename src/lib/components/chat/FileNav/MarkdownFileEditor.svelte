@@ -1,4 +1,6 @@
 <script lang="ts">
+	import type { MachineTarget } from '$lib/apis/machines';
+	export let target: MachineTarget | null = null;
 	import { v4 as uuidv4 } from 'uuid';
 	import { getAllContexts, getContext, mount, unmount, onDestroy, tick } from 'svelte';
 	import { Node, type Editor } from '@tiptap/core';
@@ -12,15 +14,13 @@
 	import { toast } from 'svelte-sonner';
 	import RichTextInput from '$lib/components/common/RichTextInput.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
-	import { downloadFileBlob, uploadNewFileToTerminal } from '$lib/apis/terminal';
+	import { downloadFileBlob, uploadNewFileToMachine } from '$lib/apis/machines';
 	import MarkdownDocument, { resolveDocumentPath } from './MarkdownDocument.svelte';
 	import KatexRenderer from '../Messages/Markdown/KatexRenderer.svelte';
 	import markedKatexExtension from '$lib/utils/marked/katex-extension';
 
 	export let value = '';
 	export let path = '';
-	export let baseUrl = '';
-	export let apiKey = '';
 	export let chatId: string | null = null;
 	export let readOnly = false;
 	export let onSave: (() => Promise<void>) | null = null;
@@ -157,8 +157,7 @@
 											content: node.attrs.source,
 											id: `editor-${uuidv4()}`,
 											path,
-											baseUrl,
-											apiKey,
+											target,
 											chatId
 										}
 									});
@@ -242,7 +241,7 @@
 	export const flushUploads = () => Promise.all(pendingImages);
 	const attachImages = (event: ClipboardEvent | DragEvent) => {
 		const currentEditor = editor;
-		if (readOnly || !currentEditor || !baseUrl || !path) return;
+		if (readOnly || !currentEditor || !target?.baseUrl || !path) return;
 		const transfer = 'clipboardData' in event ? event.clipboardData : event.dataTransfer;
 		const files = Array.from(transfer?.files ?? []).filter((file) =>
 			file.type.startsWith('image/')
@@ -263,18 +262,12 @@
 		const current = generation;
 		const documentPath = path.replace(/\\/g, '/');
 		const directory = documentPath.slice(0, documentPath.lastIndexOf('/')) || '/';
-		const connection = { baseUrl, apiKey, chatId };
+		const capturedTarget = target;
 		const upload = (async () => {
 			try {
 				for (const file of files) {
 					if (current !== generation || currentEditor.isDestroyed || readOnly) break;
-					const result = await uploadNewFileToTerminal(
-						connection.baseUrl,
-						connection.apiKey,
-						directory,
-						file,
-						connection.chatId ?? undefined
-					);
+					const result = await uploadNewFileToMachine(capturedTarget!, directory, file);
 					if (current !== generation || currentEditor.isDestroyed || readOnly) break;
 					if (!result) throw new Error($i18n.t('Failed to upload file.'));
 					const name = result.path.split('/').pop()!;
@@ -318,9 +311,9 @@
 			Array.from(dom.querySelectorAll('img')).map(async (image) => {
 				const reference = image.getAttribute('src') ?? '';
 				const file = resolveDocumentPath(path, reference);
-				if (!file || !baseUrl) return;
+				if (!file || !target?.baseUrl) return;
 				try {
-					const result = await downloadFileBlob(baseUrl, apiKey, file, chatId ?? undefined);
+					const result = await downloadFileBlob(target, file);
 					if (!result || current !== generation) return;
 					const url = URL.createObjectURL(result.blob);
 					images.set(url, reference);
@@ -402,7 +395,7 @@
 >
 	{#if pendingImages.length}<div
 			role="status"
-			class="flex items-center gap-1.5 px-3 py-1 text-xs text-gray-500"
+			class="flex items-center gap-1.5 px-3 py-1 text-xs text-base-500"
 		>
 			<Spinner className="size-3" />{$i18n.t('Uploading image...')}
 		</div>{/if}

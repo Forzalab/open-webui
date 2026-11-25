@@ -64,10 +64,12 @@ from open_webui.events import EVENTS, publish_event
 from open_webui.internal.db import get_async_db, get_async_session
 from open_webui.models.files import FileModel, Files, FileUpdateForm
 from open_webui.models.knowledge import Knowledges
+from open_webui.models.users import UserModel
 
 # Document loaders
 from open_webui.retrieval.loaders.youtube import YoutubeLoader, YoutubeTranscriptError
 from open_webui.retrieval.utils import (
+    TIKTOKEN_DISALLOWED_SPECIAL,
     build_loader_from_config,
     filter_accessible_collections,
     get_content_from_url,
@@ -132,8 +134,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger(__name__)
-
-TIKTOKEN_DISALLOWED_SPECIAL = ()
 
 # Utility functions
 # Let us find what is true among the many voices,
@@ -351,7 +351,8 @@ RETRIEVAL_CONFIG_KEYS = {
     'RAG_EXTERNAL_RERANKER_TIMEOUT': 'rag.external_reranker_timeout',
     'RAG_EXTERNAL_RERANKER_URL': 'rag.external_reranker_url',
     'RAG_FULL_CONTEXT': 'rag.full_context',
-    'RAG_FULL_TEXT_CHAR_THRESHOLD': 'rag.full_context_char_threshold',
+    'RAG_FULL_TEXT_THRESHOLD': 'rag.full_context_char_threshold',
+    'RAG_FULL_TEXT_THRESHOLD_TYPE': 'rag.full_text_threshold_type',
     'RAG_OLLAMA_API_KEY': 'rag.ollama.api_key',
     'RAG_OLLAMA_BASE_URL': 'rag.ollama.base_url',
     'RAG_OPENAI_API_BASE_URL': 'rag.openai.api_base_url',
@@ -617,7 +618,8 @@ async def get_rag_config(request: Request, user=Depends(get_admin_user)):
         'TOP_K': config['rag.top_k'],
         'BYPASS_EMBEDDING_AND_RETRIEVAL': config['rag.bypass_embedding_and_retrieval'],
         'RAG_FULL_CONTEXT': config['rag.full_context'],
-        'RAG_FULL_TEXT_CHAR_THRESHOLD': config['rag.full_context_char_threshold'],
+        'RAG_FULL_TEXT_THRESHOLD': config['rag.full_context_char_threshold'],
+        'RAG_FULL_TEXT_THRESHOLD_TYPE': config['rag.full_text_threshold_type'],
         # Hybrid search settings
         'ENABLE_RAG_HYBRID_SEARCH': config['rag.enable_hybrid_search'],
         'ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS': config['rag.enable_hybrid_search_enriched_texts'],
@@ -863,7 +865,8 @@ class ConfigForm(BaseModel):
     TOP_K: int | None = None
     BYPASS_EMBEDDING_AND_RETRIEVAL: bool | None = None
     RAG_FULL_CONTEXT: bool | None = None
-    RAG_FULL_TEXT_CHAR_THRESHOLD: int | None = Field(default=None, ge=0)
+    RAG_FULL_TEXT_THRESHOLD: int | None = Field(default=None, ge=0)
+    RAG_FULL_TEXT_THRESHOLD_TYPE: str | None = None
 
     # Hybrid search settings
     ENABLE_RAG_HYBRID_SEARCH: bool | None = None
@@ -1086,7 +1089,8 @@ async def update_rag_config(request: Request, form_data: ConfigForm, user=Depend
         'TOP_K': config['rag.top_k'],
         'BYPASS_EMBEDDING_AND_RETRIEVAL': config['rag.bypass_embedding_and_retrieval'],
         'RAG_FULL_CONTEXT': config['rag.full_context'],
-        'RAG_FULL_TEXT_CHAR_THRESHOLD': config['rag.full_context_char_threshold'],
+        'RAG_FULL_TEXT_THRESHOLD': config['rag.full_context_char_threshold'],
+        'RAG_FULL_TEXT_THRESHOLD_TYPE': config['rag.full_text_threshold_type'],
         # Hybrid search settings
         'ENABLE_RAG_HYBRID_SEARCH': config['rag.enable_hybrid_search'],
         'TOP_K_RERANKER': config['rag.top_k_reranker'],
@@ -1407,17 +1411,14 @@ def has_duplicate_content(collection_name: str, hash: str, file_id: str | None) 
     return False
 
 
-def save_docs_to_vector_db(
+def _chunk_docs(
     request: Request,
-    docs,
-    collection_name,
+    docs: list[Document],
+    collection_name: str,
     config: dict,
     metadata: dict | None = None,
-    overwrite: bool = False,
     split: bool = True,
-    add: bool = False,
-    user=None,
-) -> bool:
+) -> tuple[list[str], list[dict]]:
     def _get_docs_info(docs: list[Document]) -> str:
         docs_info = set()
 
@@ -1521,13 +1522,30 @@ def save_docs_to_vector_db(
         }
         for doc in docs
     ]
+    return texts, metadatas
+
+
+async def save_docs_to_vector_db(
+    request: Request,
+    docs: list[Document],
+    collection_name: str,
+    config: dict,
+    metadata: dict | None = None,
+    overwrite: bool = False,
+    split: bool = True,
+    add: bool = False,
+    user: UserModel | None = None,
+) -> bool:
+    texts, metadatas = await run_in_threadpool(
+        _chunk_docs, request, docs, collection_name, config, metadata=metadata, split=split
+    )
 
     try:
-        if get_vector_db_client().has_collection(collection_name=collection_name):
+        if await ASYNC_VECTOR_DB_CLIENT.has_collection(collection_name=collection_name):
             log.info('collection %s already exists', collection_name)
 
             if overwrite:
-                get_vector_db_client().delete_collection(collection_name=collection_name)
+                await ASYNC_VECTOR_DB_CLIENT.delete_collection(collection_name=collection_name)
                 log.info('deleting existing collection %s', collection_name)
             elif add is False:
                 log.info('collection %s already exists, overwrite is False and add is False', collection_name)
@@ -1570,8 +1588,6 @@ def save_docs_to_vector_db(
             # Round up to whole provider batches to preserve request boundaries.
             buffer_size = batch_size * ((buffer_size + batch_size - 1) // batch_size)
 
-        # Run async embedding in sync context using the main event loop
-        # This allows the main loop to stay responsive to health checks during long operations
         embedding_timeout = RAG_EMBEDDING_TIMEOUT
 
         log.info('adding to collection %s', collection_name)
@@ -1579,20 +1595,15 @@ def save_docs_to_vector_db(
         try:
             for start in range(0, len(texts), buffer_size):
                 buffer_texts = texts[start : start + buffer_size]
-                future = asyncio.run_coroutine_threadsafe(
+                started_at = time.monotonic()
+                embeddings = await asyncio.wait_for(
                     embedding_function(
                         [text.replace('\n', ' ') for text in buffer_texts],
                         prefix=config['rag.embedding_content_prefix'],
                         user=user,
                     ),
-                    request.app.state.main_loop,
+                    timeout=embedding_timeout,
                 )
-                started_at = time.monotonic()
-                try:
-                    embeddings = future.result(timeout=embedding_timeout)
-                except TimeoutError:
-                    future.cancel()
-                    raise
                 if embedding_timeout is not None:
                     embedding_timeout = max(embedding_timeout - (time.monotonic() - started_at), 0)
                 log.info('embeddings generated %s for %s items', len(embeddings), len(buffer_texts))
@@ -1608,19 +1619,21 @@ def save_docs_to_vector_db(
                 ]
 
                 inserted_ids.extend(item['id'] for item in items)
-                get_vector_db_client().insert(
+                await ASYNC_VECTOR_DB_CLIENT.insert(
                     collection_name=collection_name,
                     items=items,
                 )
-                del items, embeddings, future
-        except Exception:
+                del items, embeddings
+        except BaseException:
+            # Also on cancellation: a partial collection would make retries skip indexing.
             if inserted_ids:
                 try:
                     if add:
-                        get_vector_db_client().delete(collection_name=collection_name, ids=inserted_ids)
+                        await asyncio.shield(
+                            ASYNC_VECTOR_DB_CLIENT.delete(collection_name=collection_name, ids=inserted_ids)
+                        )
                     else:
-                        # This call created/replaced the collection; an empty one would make retries skip indexing.
-                        get_vector_db_client().delete_collection(collection_name=collection_name)
+                        await asyncio.shield(ASYNC_VECTOR_DB_CLIENT.delete_collection(collection_name=collection_name))
                 except Exception:
                     log.exception('failed to remove partially added items from collection %s', collection_name)
             raise
@@ -1830,14 +1843,9 @@ async def index_file(
 
                     # External embedding API takes time (5-60s+).
                     # Subsequent updates use fresh async sessions.
-                    # NOTE: save_docs_to_vector_db is a sync function that
-                    # calls asyncio.run_coroutine_threadsafe(..., main_loop).result()
-                    # which blocks the calling thread.  We MUST run it in a
-                    # worker thread to avoid deadlocking the event loop.
                     result = True
                     for name in collection_names:
-                        result = await run_in_threadpool(
-                            save_docs_to_vector_db,
+                        result = await save_docs_to_vector_db(
                             request,
                             docs=docs,
                             collection_name=name,
@@ -1886,11 +1894,12 @@ async def index_file(
 
         except Exception as e:
             log.exception(e)
+            error = ERROR_MESSAGES.PANDOC_NOT_INSTALLED if 'No pandoc was found' in str(e) else str(e)
             # Fresh session for error status update.
             async with get_async_db() as session:
                 await Files.update_file_data_by_id(
                     file.id,
-                    {'status': 'failed', 'error': str(e)},
+                    {'status': 'failed', 'error': error},
                     db=session,
                 )
                 # Clear the hash so the file can be re-uploaded after fixing the issue
@@ -1909,16 +1918,10 @@ async def index_file(
                 },
             )
 
-            if 'No pandoc was found' in str(e):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=ERROR_MESSAGES.PANDOC_NOT_INSTALLED,
-                )
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=str(e),
-                )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error,
+            )
 
     else:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
@@ -1952,7 +1955,7 @@ async def process_text(
     log.debug('text_content: %s', text_content)
 
     config = await Config.get_many(*RETRIEVAL_CONFIG_KEYS.values())
-    result = await run_in_threadpool(save_docs_to_vector_db, request, docs, collection_name, config, user=user)
+    result = await save_docs_to_vector_db(request, docs, collection_name, config, user=user)
     if result:
         await publish_event(
             request,
@@ -2216,8 +2219,7 @@ async def process_web(
                 await _validate_collection_access([collection_name], user, access_type='write')
 
             if not config['web.search.bypass_embedding_and_retrieval']:
-                await run_in_threadpool(
-                    save_docs_to_vector_db,
+                await save_docs_to_vector_db(
                     request,
                     docs,
                     collection_name,
@@ -2773,8 +2775,7 @@ async def process_web_search(request: Request, form_data: SearchForm, user=Depen
             collection_name = f'web-search-{user.id}-{calculate_sha256_string("-".join(form_data.queries))}'[:63]
 
             try:
-                await run_in_threadpool(
-                    save_docs_to_vector_db,
+                await save_docs_to_vector_db(
                     request,
                     docs,
                     collection_name,
@@ -3156,6 +3157,15 @@ async def process_files_batch(
                     },
                 )
             ]
+            # Reuse file-{id} chunks so loader metadata like PDF pages survives
+            file_result = await ASYNC_VECTOR_DB_CLIENT.query(
+                collection_name=f'file-{file.id}', filter={'file_id': file.id}
+            )
+            if has_vector_results(file_result):
+                docs = [
+                    Document(page_content=text, metadata={**metadata, 'name': file.filename, 'hash': hash})
+                    for text, metadata in zip(file_result.documents[0], file_result.metadatas[0])
+                ]
 
             all_docs.extend(docs)
 
@@ -3174,8 +3184,7 @@ async def process_files_batch(
     # Save all documents in one batch
     if all_docs:
         try:
-            await run_in_threadpool(
-                save_docs_to_vector_db,
+            await save_docs_to_vector_db(
                 request,
                 all_docs,
                 collection_name,

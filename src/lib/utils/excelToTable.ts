@@ -1,12 +1,18 @@
-import * as XLSX from 'xlsx';
+import type * as SheetJS from 'xlsx';
+import DOMPurify from 'dompurify';
 import { OfficePackage, attr, children, elements } from './comments/package';
 import type { CellObject, Range, WorkBook, WorkSheet } from 'xlsx';
+
+// SheetJS is large, so it loads with the first workbook instead of with the app.
+// Every other export here works on a workbook that readExcelWorkbook returned.
+let XLSX: typeof SheetJS;
 
 export type PreviewSheet = WorkSheet & { '!previewStyles'?: Record<string, string> };
 
 // SheetJS CE reads values and number formats, but not fonts, borders or alignment.
 // Keep presentation metadata separate from the workbook's editable cell values.
 export async function readExcelWorkbook(data: ArrayBuffer): Promise<WorkBook> {
+	XLSX ??= await import('xlsx');
 	const workbook = XLSX.read(data, { type: 'array', cellStyles: true, cellNF: true });
 	if (new Uint8Array(data)[0] !== 0x50 || new Uint8Array(data)[1] !== 0x4b) return workbook; // XLS / CSV have no OOXML styles.
 	const pkg = await OfficePackage.open(data);
@@ -239,6 +245,16 @@ const esc = (value: unknown): string =>
 		(c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!
 	);
 
+/** The preview grid is bounded; a sheet past that bound is previewed as a notice, not an error. */
+export class SheetTooLargeError extends Error {
+	constructor(
+		public usedRange: string,
+		public rowCount: number
+	) {
+		super('This sheet is too large to preview. Download it to view all cells.');
+	}
+}
+
 export interface ExcelTableResult {
 	html: string;
 	rowCount: number;
@@ -246,7 +262,7 @@ export interface ExcelTableResult {
 }
 
 /** Render from cells, not sheet_to_json: formatted text, formulas and coordinates matter. */
-export async function excelToTable(worksheet: PreviewSheet): Promise<ExcelTableResult> {
+export function excelToTable(worksheet: PreviewSheet): ExcelTableResult {
 	const range = XLSX.utils.decode_range(worksheet['!ref'] ?? 'A1');
 	const merges = worksheet['!merges'] ?? [];
 	for (const merge of merges) {
@@ -261,8 +277,7 @@ export async function excelToTable(worksheet: PreviewSheet): Promise<ExcelTableR
 	const lastRow = range.e.r,
 		lastCol = range.e.c;
 	// shortcut: bounded HTML grid; use virtualization before supporting larger used ranges.
-	if (rowCount * colCount > 200000)
-		throw new Error('This sheet is too large to preview. Download it to view all cells.');
+	if (rowCount * colCount > 200000) throw new SheetTooLargeError(usedRange, rowCount);
 	// A worksheet continues past its populated range; the viewer grows these blank margins on scroll.
 	range.e.r = Math.min(1048575, Math.max(59, range.e.r + 20));
 	range.e.c = Math.min(16383, Math.max(19, range.e.c + 4));
@@ -341,7 +356,6 @@ export async function excelToTable(worksheet: PreviewSheet): Promise<ExcelTableR
 		parts.push('</tr>');
 	}
 	parts.push('</tbody></table>');
-	const DOMPurify = (await import('dompurify')).default;
 	return { html: DOMPurify.sanitize(parts.join(''), { ADD_ATTR: ['target'] }), rowCount, colCount };
 }
 
@@ -470,7 +484,7 @@ export class ExcelWorkbookEditor {
 	private changes = new Map<string, Change>();
 	private savedState = '[]';
 	private protectedSheets = new Set<string>();
-	private readOnlyRanges = new Map<string, XLSX.Range[]>();
+	private readOnlyRanges = new Map<string, Range[]>();
 	private sheetPaths = new Map<string, string>();
 	private original: ArrayBuffer;
 	private expected: ArrayBuffer;

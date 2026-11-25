@@ -35,7 +35,6 @@ from open_webui.env import (
     WEBSOCKET_SERVER_PING_INTERVAL,
     WEBSOCKET_SERVER_PING_TIMEOUT,
 )
-from open_webui.models.access_grants import AccessGrants
 from open_webui.models.channels import Channels
 from open_webui.models.chat_messages import ChatMessages
 from open_webui.models.chats import Chats
@@ -56,6 +55,7 @@ from open_webui.tasks import (
 )
 from open_webui.utils.access_control import has_permission
 from open_webui.utils.access_control.files import has_access_to_note_files
+from open_webui.utils.access_control.notes import has_note_access
 from open_webui.utils.auth import get_verified_user_by_token
 from open_webui.utils.chat_id import is_saved_chat_id, is_temporary_chat_id
 from open_webui.utils.json_codec import SOCKETIO_JSON, JSONCodec, dumps_bytes
@@ -222,11 +222,6 @@ YDOC_MANAGER = YdocManager(
     redis_key_prefix=f'{REDIS_KEY_PREFIX}:ydoc:documents',
 )
 
-REDIS_EVENT_CHANNEL = f'{REDIS_KEY_PREFIX}:direct_completion'
-
-EVENT_QUEUES: dict[str, asyncio.Queue] = {}
-EVENT_PUBLISH_LOCK = asyncio.Lock()
-
 
 def get_session_pool_batches():
     """All session pool entries, in bounded batches for the Redis backing."""
@@ -304,8 +299,13 @@ async def publish_note_presence(note_id: str):
         if REDIS is not None and not await lock.owned():
             return
         await sio.emit(
-            'note:presence',
-            {'note_id': note_id, 'users': sorted(people.values(), key=lambda person: person['id'])},
+            'events',
+            {
+                'data': {
+                    'type': 'note:presence',
+                    'data': {'note_id': note_id, 'users': sorted(people.values(), key=lambda person: person['id'])},
+                }
+            },
             room=f'note:{note_id}',
         )
 
@@ -592,7 +592,7 @@ async def disconnect_sessions_for_users(user_ids: list[str], *, refresh_access: 
     for sid in session_ids:
         if refresh_access:
             try:
-                await sio.emit('access:updated', {}, to=sid)
+                await sio.emit('events', {'data': {'type': 'access:updated'}}, to=sid)
             except Exception:
                 log.exception('Failed to notify session %s about changed access', sid)
         try:
@@ -734,6 +734,29 @@ async def refresh_chat_access(chat_id=None):
         await publish_chat_presence(cid)
 
 
+async def refresh_note_access(note_id=None):
+    """Make users who lost access to notes they have open, e.g. through a folder, leave their rooms."""
+    user_ids_by_note: dict[str, set[str]] = {}
+    for batch in get_session_pool_batches():
+        for _, session in batch:
+            for id in (session or {}).get('note_ids') or []:
+                if not note_id or id == note_id:
+                    user_ids_by_note.setdefault(id, set()).add(session['id'])
+
+    for id, user_ids in user_ids_by_note.items():
+        note = await Notes.get_note_by_id(id)
+        if not note:
+            continue
+        users = await Users.get_users_by_user_ids(list(user_ids))
+        revoked = [
+            user.id for user in users if user.role != 'admin' and not await has_note_access(user.id, note, 'read')
+        ]
+        if not revoked:
+            continue
+        for room in note_rooms(note):
+            await leave_room_for_users(room, revoked)
+
+
 @sio.on('heartbeat')
 async def heartbeat(sid, data):
     user = await get_socket_session_user(sid)
@@ -796,16 +819,7 @@ async def join_note(sid, data):
         log.error(f'Note {data["note_id"]} not found for user {user.id}')
         return
 
-    if (
-        user.role != 'admin'
-        and user.id != note.user_id
-        and not await AccessGrants.has_access(
-            user_id=user.id,
-            resource_type='note',
-            resource_id=note.id,
-            permission='read',
-        )
-    ):
+    if user.role != 'admin' and not await has_note_access(user.id, note, 'read'):
         log.error(f'User {user.id} does not have access to note {data["note_id"]}')
         return
 
@@ -831,7 +845,7 @@ async def leave_note(sid, data):
                 'note_ids': [id for id in session.get('note_ids', []) if id != note_id],
                 'note_locations': locations,
             }
-        await publish_note_presence(note_id)
+            await publish_note_presence(note_id)
 
 
 @sio.on('events:channel')
@@ -984,6 +998,22 @@ def normalize_document_id(document_id: str) -> str:
     return document_id
 
 
+def note_rooms(note) -> list[str]:
+    pages = normalize_pages(note.data)['pages']
+    return [
+        f'note:{note.id}',
+        f'doc_note:{note.id}',
+        *[f'doc_note:{note.id}:page:{page["id"]}:{page.get("generation", 0)}' for page in pages],
+    ]
+
+
+async def close_note(note):
+    """Close a deleted note's documents and rooms."""
+    await close_changed_note_documents(note, None)
+    for room in note_rooms(note):
+        await sio.close_room(room)
+
+
 async def close_changed_note_documents(previous, current):
     remaining = {p['id']: p.get('generation', 0) for p in normalize_pages(current.data)['pages']} if current else {}
     for page in normalize_pages(previous.data)['pages']:
@@ -1035,16 +1065,7 @@ async def ydoc_document_join(sid, data):
                 return
             page = document_page(note.data, document_id)
 
-            if (
-                user.get('role') != 'admin'
-                and user.get('id') != note.user_id
-                and not await AccessGrants.has_access(
-                    user_id=user.get('id'),
-                    resource_type='note',
-                    resource_id=note.id,
-                    permission='read',
-                )
-            ):
+            if user.get('role') != 'admin' and not await has_note_access(user.get('id'), note, 'read'):
                 log.error(f'User {user.get("id")} does not have access to note {note_id}')
                 return
         else:
@@ -1130,22 +1151,15 @@ async def document_save_handler(document_id, data, user):
             log.error(f'Note {note_id} not found')
             return
 
-        if (
-            user.get('role') != 'admin'
-            and user.get('id') != note.user_id
-            and not await AccessGrants.has_access(
-                user_id=user.get('id'),
-                resource_type='note',
-                resource_id=note.id,
-                permission='write',
-            )
-        ):
+        if user.get('role') != 'admin' and not await has_note_access(user.get('id'), note, 'write'):
             log.error(f'User {user.get("id")} does not have write access to note {note_id}')
             return
 
         page = document_page(note.data, document_id)
         if not isinstance(data.get('content'), dict):
             return None
+        if data['content'] == page['content']:
+            return note
         editor = await Users.get_user_by_id(user['id'])
         if not editor or not await has_access_to_note_files(note, get_content_files(data['content']), editor):
             raise ValueError('Cannot attach files you cannot access')
@@ -1159,11 +1173,16 @@ async def document_save_handler(document_id, data, user):
         )
         if saved:
             await sio.emit(
-                'events:note',
+                'events',
                 {
-                    'id': note_id,
-                    'page': get_page(saved.data, page['id']),
-                    'updated_at': saved.updated_at,
+                    'data': {
+                        'type': 'note:updated',
+                        'data': {
+                            'id': note_id,
+                            'page': get_page(saved.data, page['id']),
+                            'updated_at': saved.updated_at,
+                        },
+                    }
                 },
                 to=f'note:{note_id}',
             )
@@ -1244,16 +1263,7 @@ async def yjs_document_update(sid, data):
                 return
             page = document_page(note.data, document_id)
 
-            if (
-                user.get('role') != 'admin'
-                and user.get('id') != note.user_id
-                and not await AccessGrants.has_access(
-                    user_id=user.get('id'),
-                    resource_type='note',
-                    resource_id=note.id,
-                    permission='write',
-                )
-            ):
+            if user.get('role') != 'admin' and not await has_note_access(user.get('id'), note, 'write'):
                 log.warning(f'User {user.get("id")} does not have write access to note {note_id}. Rejecting update.')
                 return
 
@@ -1444,65 +1454,6 @@ async def disconnect(sid, reason=None):
     await remove_document_session(sid)
 
 
-async def redis_event_listener() -> None:
-    """Route events received over Redis to their local queues."""
-    reconnect_interval = REDIS_PUBSUB_RECONNECT_INTERVAL
-
-    while True:
-        pubsub = None
-        try:
-            # RedisCluster can't route a pubsub subscribe until initialize() fills its slot cache.
-            await REDIS.initialize()
-
-            pubsub = REDIS.pubsub()
-            await pubsub.subscribe(REDIS_EVENT_CHANNEL)
-            reconnect_interval = REDIS_PUBSUB_RECONNECT_INTERVAL
-
-            async for message in pubsub.listen():
-                if message['type'] != 'message':
-                    continue
-                event = JSONCodec.loads(message['data'])
-                queue = EVENT_QUEUES.get(event['channel'])
-                if queue is not None:
-                    await queue.put(event['data'])
-            log.warning('Redis event listener stopped. Retrying.')
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception('Redis event listener failed. Retrying.')
-        finally:
-            if pubsub:
-                with suppress(Exception):
-                    await pubsub.aclose()
-
-        await asyncio.sleep(reconnect_interval)
-        reconnect_interval = min(reconnect_interval * 2, REDIS_PUBSUB_MAX_RECONNECT_INTERVAL)
-
-
-@sio.on('*')
-async def socket_event_handler(event: Any, sid: str, *args: Any) -> None:
-    """Route user-owned stream events to a local queue or another worker."""
-    if not isinstance(event, str) or event.count(':') != 2 or not args:
-        return
-
-    # The lock keeps arrival order; the sid re-check drops every event after a failed check
-    session_check = asyncio.create_task(get_socket_session_user(sid))
-    async with SOCKET_EVENT_LOCKS.setdefault(('session', sid), asyncio.Lock()):
-        user = await session_check
-        if not user or sid not in LOCAL_AUTHENTICATED_SIDS or user.get('id') != event.split(':', 1)[0]:
-            return
-
-        queue = EVENT_QUEUES.get(event)
-        if queue is not None:
-            await queue.put(args[0])
-        elif WEBSOCKET_MANAGER == 'redis':
-            try:
-                async with EVENT_PUBLISH_LOCK:
-                    await REDIS.publish(REDIS_EVENT_CHANNEL, dumps_bytes({'channel': event, 'data': args[0]}))
-            except RedisError as e:
-                log.debug('Failed to relay socket event %s: %s', event, e)
-
-
 async def _make_channel_emitter(request_info):
     """Event emitter that routes pipeline output to a channel message.
 
@@ -1645,7 +1596,11 @@ async def get_event_emitter(request_info, update_db=True):
             pending_approval_ids = await ChatMessages.get_chat_ids_with_pending_approval([chat_id])
             event_data = {
                 **event_data,
-                'data': {**(event_data.get('data') or {}), 'pending_approval': chat_id in pending_approval_ids},
+                'data': {
+                    **(event_data.get('data') or {}),
+                    'pending_approval': chat_id in pending_approval_ids,
+                    **({'folder_unread_counts': await get_folder_unread_counts(user_id)} if not internal else {}),
+                },
             }
 
         room = f'user:{user_id}'
@@ -1660,7 +1615,8 @@ async def get_event_emitter(request_info, update_db=True):
                 {
                     'chat_id': chat_id,
                     'message_id': message_id,
-                    **({'internal': True} if internal else {}),
+                    # The page shows no notifications for these.
+                    **({'internal': True} if internal or request_info.get('subagent') else {}),
                     'data': event_data,
                 },
                 room=room,
@@ -1831,12 +1787,23 @@ async def get_event_call(request_info):
 
     async def __event_caller__(event_data):
         session_id = request_info['session_id']
+        chat_id = request_info['chat_id']
+        message_id = request_info['message_id']
         if is_temporary_chat_id(request_info['chat_id']):
             owner = await get_temporary_chat(redis, request_info['chat_id'])
             if owner and owner['user_id'] == request_info['user_id']:
                 session_id = request_info['session_id'] = owner['session_id']
                 if 'session_id' in (event_data.get('data') or {}):
                     event_data = {**event_data, 'data': {**event_data['data'], 'session_id': session_id}}
+
+        if request_info.get('internal') is True and 'session_id' not in (event_data.get('data') or {}):
+            # The page only answers for its open chat.
+            metas = await Chats.get_chat_metas_by_chat_ids([chat_id], include_archived=True)
+            if not metas:
+                return {'error': 'Client session disconnected.'}
+            chat_id, message_id = metas[0]['parent_chat_id'], metas[0]['parent_message_id']
+            if chat_id not in ((SESSION_POOL.get(session_id) or {}).get('chat_ids') or []):
+                session_id = await asyncio.to_thread(get_user_chat_session_id, request_info['user_id'], chat_id)
 
         # session_id is client-supplied; only the requesting user's own live session may be targeted.
         session = SESSION_POOL.get(session_id)
@@ -1877,8 +1844,8 @@ async def get_event_call(request_info):
                         sio.call(
                             'events',
                             {
-                                'chat_id': request_info['chat_id'],
-                                'message_id': request_info['message_id'],
+                                'chat_id': chat_id,
+                                'message_id': message_id,
                                 'data': event_data,
                             },
                             to=session_id,
@@ -1914,7 +1881,7 @@ async def get_event_call(request_info):
                                         next_session_id = None
                                 else:
                                     next_session_id = await asyncio.to_thread(
-                                        get_user_chat_session_id, request_info['user_id'], request_info['chat_id']
+                                        get_user_chat_session_id, request_info['user_id'], chat_id
                                     )
                                 if next_session_id is not None:
                                     session_id = request_info['session_id'] = next_session_id
@@ -1930,8 +1897,8 @@ async def get_event_call(request_info):
                 await sio.emit(
                     'events',
                     {
-                        'chat_id': request_info.get('chat_id'),
-                        'message_id': request_info.get('message_id'),
+                        'chat_id': chat_id,
+                        'message_id': message_id,
                         'data': {'type': 'request:interaction:done', 'data': {'interaction_id': interaction_id}},
                     },
                     to=session_id,

@@ -187,6 +187,11 @@ def is_host_blocked(host: Union[str, Sequence[str]], filter_list: list[str] | No
     return any(_host_matches_pattern(h, blocked) for h in hosts for blocked in block_list)
 
 
+def is_empty_reply(message: dict) -> bool:
+    """An assistant reply with nothing in it, such as a failed one. Requests leave these out."""
+    return message.get('role') == 'assistant' and not message.get('content') and not message.get('output')
+
+
 def get_message_list(messages_map, message_id):
     """
     Reconstructs a list of messages in order up to the specified message_id.
@@ -223,7 +228,7 @@ def get_message_list(messages_map, message_id):
 
 
 def get_messages_content(messages: list[dict]) -> str:
-    return '\n'.join([f'{message["role"].upper()}: {get_content_from_message(message)}' for message in messages])
+    return '\n'.join([f'{message["role"].upper()}: {get_content_from_message(message) or ""}' for message in messages])
 
 
 def get_last_user_message_item(messages: list[dict]) -> dict | None:
@@ -287,6 +292,27 @@ def get_paired_tool_call_ids(messages: list[dict]) -> list[set[str]]:
             paired_ids_by_message[block_index] = paired_ids
 
     return paired_ids_by_message
+
+
+def get_tool_results(messages: list[dict], name: str) -> list[str]:
+    """Everything the named tool returned in these messages, oldest first."""
+    call_ids = {
+        tool_call.get('id')
+        for message in messages
+        for tool_call in message.get('tool_calls') or []
+        if (tool_call.get('function') or {}).get('name') == name
+    }
+    return [
+        get_content_from_message(message) or ''
+        for message in messages
+        if message.get('role') == 'tool' and message.get('tool_call_id') in call_ids
+    ]
+
+
+def get_last_tool_result(messages: list[dict], name: str) -> str | None:
+    """What the named tool last returned in these messages, or None if it never did."""
+    results = get_tool_results(messages, name)
+    return results[-1] if results else None
 
 
 def reconcile_tool_pairs(messages: list[dict]) -> list[dict]:
@@ -455,6 +481,8 @@ def convert_output_to_messages(
               (for legacy providers that expect reasoning as tagged content).
             - ``'reasoning_content'``: set as ``reasoning_content`` top-level field
               (for llama.cpp, which routes it via the chat template).
+            - ``'reasoning'``: set as ``reasoning`` top-level field
+              (for vLLM and OpenRouter).
         flatten_tool_images: Move tool output images into a following user
             message for Chat Completions providers.
     """
@@ -465,39 +493,32 @@ def convert_output_to_messages(
     messages = []
     pending_tool_calls = []
     pending_content = []
-    pending_reasoning = []  # Only populated for top-level structured reasoning fields.
-    pending_reasoning_details = []
+    pending_reasoning = {}  # Reasoning fields for the next assistant message.
     pending_tool_image_urls = []
     pending_tool_outputs = []
 
     def flush_pending():
-        nonlocal pending_content, pending_tool_calls, pending_reasoning, pending_reasoning_details
-        if not pending_content and not pending_tool_calls and not pending_reasoning and not pending_reasoning_details:
+        nonlocal pending_content, pending_tool_calls, pending_reasoning
+        if not pending_content and not pending_tool_calls and not pending_reasoning:
             return
 
         message = {
             'role': 'assistant',
-            'content': '\n'.join(pending_content) if pending_content else '',
+            'content': '\n'.join(pending_content) if pending_content else (None if pending_tool_calls else ''),
             **({'tool_calls': pending_tool_calls} if pending_tool_calls else {}),
+            **pending_reasoning,
         }
 
-        if pending_reasoning:
-            if reasoning_format == 'thinking':
-                message['thinking'] = '\n'.join(pending_reasoning)
-            else:
-                message['reasoning_content'] = '\n'.join(pending_reasoning)
+        if reasoning_format in pending_reasoning:
+            message[reasoning_format] = '\n'.join(pending_reasoning[reasoning_format])
         elif pending_tool_calls and reasoning_format == 'reasoning_content':
             # DeepSeek rejects a tool call turn without reasoning_content.
             message['reasoning_content'] = ''
 
-        if pending_reasoning_details:
-            message['reasoning_details'] = pending_reasoning_details
-
         messages.append(message)
         pending_content = []
         pending_tool_calls = []
-        pending_reasoning = []
-        pending_reasoning_details = []
+        pending_reasoning = {}
 
     def flush_tool_images():
         nonlocal pending_tool_image_urls
@@ -606,6 +627,10 @@ def convert_output_to_messages(
             pending_tool_outputs.append(item)
 
         elif item_type == 'reasoning':
+            # Encrypted reasoning only helps the provider if it gets the item back whole.
+            if raw and item.get('encrypted_content'):
+                pending_reasoning.setdefault('reasoning_items', []).append(item)
+
             reasoning_details = item.get('reasoning_details') if raw else None
             if reasoning_details:
                 reasoning_details = reasoning_details if isinstance(reasoning_details, list) else [reasoning_details]
@@ -632,12 +657,12 @@ def convert_output_to_messages(
                     start_tag = item.get('start_tag', '<think>')
                     end_tag = item.get('end_tag', '</think>')
                     pending_content.append(f'{start_tag}{reasoning_text}{end_tag}')
-                elif reasoning_format in {'thinking', 'reasoning_content'}:
+                elif reasoning_format in {'thinking', 'reasoning_content', 'reasoning'}:
                     # Native providers: collect for their top-level reasoning field.
-                    pending_reasoning.append(reasoning_text)
+                    pending_reasoning.setdefault(reasoning_format, []).append(reasoning_text)
 
             if reasoning_details:
-                pending_reasoning_details.extend(reasoning_details)
+                pending_reasoning.setdefault('reasoning_details', []).extend(reasoning_details)
 
         elif item_type == 'open_webui:code_interpreter':
             # Always include code interpreter content so the LLM knows
