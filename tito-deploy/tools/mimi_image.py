@@ -1,7 +1,7 @@
 """
 title: Mimi Image
 author: tito
-version: 0.1.0
+version: 0.2.0
 description: Sửa ảnh đã gửi hoặc vẽ ảnh mới cho Mimi qua OpenRouter.
 """
 
@@ -35,24 +35,22 @@ DONE_GEN_TEXT = 'Xong rồi, ảnh ở trên nè.'
 HTTP_ERROR = 'Chưa sửa được ảnh (mã {code}).'
 
 EDIT_TEMPLATE = (
-    "Edit the attached photo. This is a real personal photo of a Vietnamese woman; the result must still look like an untouched, real camera photo, ready to post on Facebook.\n"
-    "Change only, all subtle and natural:\n"
-    "{change}\n"
-    "Also, very subtly and barely noticeably: soften only the deepest wrinkles a little and gently even out the skin.\n"
-    "Keep exactly the same: her identity, ethnicity, face shape, eye shape and eyelids, eye size, nose, lips, brows, natural asymmetry, expression, clothing and accessories, the whole background, the framing and the crop. Do not add or remove anything. Keep visible pores and natural skin texture; she should look like herself on a good day, like great skincare, not a filter.\n"
-    "Photo look: fix exposure the way a good modern phone would: if any part is overexposed or washed out, recover the highlights and bring exposure down only very slightly, keeping the photo bright, airy and sunny; give any sky a deeper natural blue; and make the colors vivid but true, like a good modern phone photo. Keep her skin tone warm and healthy; do not lighten, whiten or pinken her skin. No yellow cast, no haze, no beauty-filter look.\n"
-    "Do not add text, logos or watermarks."
+    "Retouch this real photo of a Vietnamese woman so it still looks like an unedited camera photo, ready for Facebook.\n"
+    "Change: {change}\n"
+    "Also: her skin slightly smoother and more even, with natural pores and texture.\n"
+    "Same person, same face, same expression, same pose, same clothes, same background, same framing.\n"
+    "Colors: bright, clear and true to life, like a good modern phone photo; healthy, warm, natural skin tone; clear natural sky."
 )
 
-GEN_SUFFIX = 'Photorealistic, natural colors, like a good modern phone photo. Do not add text, logos or watermarks.'
+GEN_SUFFIX = 'Photorealistic, natural colors, like a good modern phone photo.'
 
 
 def build_edit_prompt(change: str) -> str:
     """Locked edit prompt; the change text is inserted literally (str.replace, never .format)."""
     c = (change or '').strip()
     if not c:
-        return EDIT_TEMPLATE.replace('{change}\n', '')
-    return EDIT_TEMPLATE.replace('{change}\n', c + '\n')
+        return EDIT_TEMPLATE.replace('Change: {change}\n', '')
+    return EDIT_TEMPLATE.replace('Change: {change}\n', 'Change: ' + c + '\n')
 
 
 def build_generate_prompt(description: str) -> str:
@@ -215,10 +213,10 @@ async def _save_image(request, png_bytes: bytes, user, metadata) -> str:
 class Tools:
     class Valves(BaseModel):
         ENABLED: bool = False
-        MODEL: str = 'bytedance-seed/seedream-5-0-flash-20261001'
+        MODEL: str = 'bytedance-seed/seedream-5-5-20261112'
         RESOLUTION: str = '2K'
         OPENROUTER_API_KEY: str = ''
-        PRICE_PER_IMAGE_USD: float = 0.02
+        PRICE_PER_IMAGE_USD: float = 0.045
         DAILY_CAP_USD: float = 1.0
         ALLOWED_USER_IDS: str = ''
         SPEND_FILE: str = ''

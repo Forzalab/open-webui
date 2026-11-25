@@ -188,12 +188,12 @@ def _spend(path):
 
 
 def test_valve_defaults_are_exact():
-    # SOURCE: AC valves - names and literal defaults.
+    # SOURCE: AC valves - names and literal defaults (v2 model/price).
     _require()
     v = module.Tools().Valves()
     assert (v.ENABLED, v.MODEL, v.RESOLUTION, v.OPENROUTER_API_KEY, v.PRICE_PER_IMAGE_USD,
             v.DAILY_CAP_USD, v.ALLOWED_USER_IDS, v.SPEND_FILE, v.TIMEOUT_SECONDS) == (
-        False, 'bytedance-seed/seedream-5-0-flash-20261001', '2K', '', 0.02, 1.0, '', '', 120)
+        False, 'bytedance-seed/seedream-5-5-20261112', '2K', '', 0.045, 1.0, '', '', 120)
 
 
 def test_disabled_and_missing_key_make_no_http_call(monkeypatch, tmp_path):
@@ -328,21 +328,22 @@ def test_requests_are_exact_and_run_off_the_loop_thread(monkeypatch, tmp_path):
 
 
 def test_prompt_builders_are_locked():
-    # SOURCE: AC8 - edit template fragments + empty change; generate strip + suffix.
+    # SOURCE: AC8 v2 - positive-only template; empty change drops the Change line.
     _require()
     change = 'replace the background with a beach'
     p = module.build_edit_prompt(change)
-    assert p.startswith('Edit the attached photo.')
-    assert p.count(change) == 1
-    assert 'Keep exactly the same:' in p
-    assert 'do not lighten, whiten or pinken her skin' in p
-    assert 'very subtly and barely noticeably' in p
-    assert p.endswith('Do not add text, logos or watermarks.')
+    assert p.startswith('Retouch this real photo') and p.endswith('clear natural sky.')
+    assert p.count('Change: ' + change) == 1
+    for fact in ('Same person, same face', 'healthy, warm, natural skin tone',
+                 'slightly smoother and more even'):
+        assert fact in p
     for empty in ('', '   '):
-        assert 'very subtly and barely noticeably' in module.build_edit_prompt(empty)
-    assert module.build_generate_prompt('  a red bicycle  ') == (
-        'a red bicycle\nPhotorealistic, natural colors, like a good modern phone photo. '
-        'Do not add text, logos or watermarks.')
+        q = module.build_edit_prompt(empty)
+        assert 'Change:' not in q
+        for bad in ('do not', "don't", 'never', ' no ', 'not ', 'avoid', 'without'):
+            assert bad not in q.lower(), bad
+    assert module.build_generate_prompt('a cat') == (
+        'a cat\nPhotorealistic, natural colors, like a good modern phone photo.')
 
 
 def test_success_saves_png_emits_file_and_returns_done(monkeypatch, tmp_path):
