@@ -1,8 +1,8 @@
 """
 title: Mimi Image
 author: tito
-version: 0.2.0
-description: Sửa ảnh đã gửi hoặc vẽ ảnh mới cho Mimi qua OpenRouter.
+version: 0.2.1
+description: Sửa ảnh đã gửi hoặc vẽ ảnh mới qua OpenRouter (Mimi + Tito).
 """
 
 import asyncio
@@ -35,9 +35,9 @@ DONE_GEN_TEXT = 'Xong rồi, ảnh ở trên nè.'
 HTTP_ERROR = 'Chưa sửa được ảnh (mã {code}).'
 
 EDIT_TEMPLATE = (
-    "Retouch this real photo of a Vietnamese woman so it still looks like an unedited camera photo, ready for Facebook.\n"
+    "Retouch this real photo of a Vietnamese person so it still looks like an unedited camera photo, ready for Facebook.\n"
     "Change: {change}\n"
-    "Also: her skin slightly smoother and more even, with natural pores and texture.\n"
+    "Also: skin slightly smoother and more even, with natural pores and texture.\n"
     "Same person, same face, same expression, same pose, same clothes, same background, same framing.\n"
     "Colors: bright, clear and true to life, like a good modern phone photo; healthy, warm, natural skin tone; clear natural sky."
 )
