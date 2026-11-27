@@ -411,7 +411,8 @@ def test_beauty_prompt_change_before_output_braces_literal():
     change = 'make {the} eyes brighter, keep %(x)s'
     p = module.build_beauty_prompt(face, change)
     assert p.count(face) == 1 and p.count(change) == 1
-    ask = 'HER OWN REQUEST, done on top of the retouch, everything else as above: ' + change
+    ask = ('HER OWN REQUEST, done in full on top of the retouch; for the parts it names '
+           'it takes priority over the locked base, everything else as above: ') + change
     assert ask + '\n\nOUTPUT: ' in p
     assert p.index('THE RETOUCH') < p.index(ask) < p.index('OUTPUT:')
     q = module.build_beauty_prompt(face, '   ')
@@ -441,7 +442,7 @@ def test_edit_image_kind_and_face_dispatch(monkeypatch, tmp_path):
     doc = module.Tools.edit_image.__doc__
     for fact in ('Dùng cho MỌI yêu cầu sửa ảnh đã gửi', 'một hoặc hai mã', 'Mặc định "beauty"',
                  'other = ảnh KHÔNG cần làm đẹp người', 'clothes/object/arm',
-                 'Không bao giờ làm người ốm đi', 'chỉ khi làm đẹp người',
+                 'Nếu họ NÓI muốn ốm hơn', 'chỉ khi làm đẹp người',
                  'the black bag strap across her chest'):
         assert fact in doc, fact
     assert len(doc.strip().splitlines()) <= 25
@@ -679,10 +680,12 @@ def test_change_text_with_braces_and_percent_survives_on_both_paths(monkeypatch,
     change = 'remove {the} strap, keep %(x)s 100% and [the] wall'
     p = _prompt(monkeypatch, tmp_path, change=change, kind='beauty,object', face='a face with {curly}')
     assert 'a face with {curly}' in p
-    assert 'HER OWN REQUEST, done on top of the retouch, everything else as above: ' + change in p
+    assert ('HER OWN REQUEST, done in full on top of the retouch; for the parts it names '
+            'it takes priority over the locked base, everything else as above: ') + change in p
     assert module.RECIPES['object'] in p
     q = _prompt(monkeypatch, tmp_path, change=change, kind='other,object')
-    assert 'THEIR OWN REQUEST: ' + change in q
+    assert ('THEIR OWN REQUEST, done in full; for the parts it names it takes priority over '
+            'the KEEP list: ') + change in q
     assert module.RECIPES['object'] in q
 
 
@@ -695,4 +698,18 @@ def test_default_kind_is_v03_beauty_output_without_recipe_block(monkeypatch, tmp
         p = _prompt(monkeypatch, tmp_path, change='smooth the skin', face='her face', kind=kind)
         assert p == expected
         assert '6b.' not in p
+
+
+def test_explicit_ask_beats_locked_base_on_beauty_path(monkeypatch, tmp_path):
+    # SOURCE: v0.4.0 follow-up "their photo, their choice" - an explicit ask is written
+    # through verbatim; the request paragraph says it outranks the locked base. No recipes,
+    # so the phrase can only come from that paragraph, not the 6b block.
+    _require()
+    change = 'slim the waist a little'
+    p = _prompt(monkeypatch, tmp_path, change=change, kind='beauty', face='her face')
+    assert '6b.' not in p
+    assert 'takes priority over the locked base' in p
+    assert change in p
+    assert ('HER OWN REQUEST, done in full on top of the retouch; for the parts it names '
+            'it takes priority over the locked base, everything else as above: ') + change in p
 

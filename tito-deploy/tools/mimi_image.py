@@ -173,7 +173,8 @@ def build_beauty_prompt(face: str, change: str, keys=()) -> str:
     if c:
         prompt = prompt.replace(
             'OUTPUT: ',
-            'HER OWN REQUEST, done on top of the retouch, everything else as above: '
+            'HER OWN REQUEST, done in full on top of the retouch; for the parts it names '
+            'it takes priority over the locked base, everything else as above: '
             + c + '\n\nOUTPUT: ',
         )
     recipes = _recipe_keys(keys)
@@ -197,7 +198,8 @@ def build_neutral_prompt(keys, change: str = '') -> str:
     else:
         fix = _NEUTRAL_KEEP_SENTENCE + '\n'
     prompt = NEUTRAL_TEMPLATE.replace(_NEUTRAL_FIX_SLOT, fix)
-    request = ('THEIR OWN REQUEST: ' + c + '\n') if c else ''
+    request = ('THEIR OWN REQUEST, done in full; for the parts it names it takes priority '
+               'over the KEEP list: ' + c + '\n') if c else ''
     return prompt.replace(_NEUTRAL_REQUEST_SLOT, request)
 
 
@@ -485,8 +487,7 @@ class Tools:
         túi, tay ai, cột làm người nhìn to ra; arm = tay ép sát người; stranger = người
         lạ, đồ lỉnh kỉnh.
         other = ảnh KHÔNG cần làm đẹp người (cảnh, đồ vật) hoặc sửa thứ khác hẳn.
-        "nhìn mập/bụng to/tay to": nhìn ảnh, chọn nguyên nhân (clothes/object/arm).
-        Không bao giờ làm người ốm đi.
+        "- "nhìn mập/bụng to/tay to" mà KHÔNG nói muốn ốm hơn: chọn nguyên nhân trong ảnh (clothes/object/arm). Nếu họ NÓI muốn ốm hơn, thon hơn, trẻ hơn hay đổi dáng: viết đúng điều đó vào change, làm đúng ý họ, không bình luận."
         ``face``: chỉ khi làm đẹp người: tiếng Anh, một đoạn, tả khuôn mặt đúng như
         trong ảnh, không khen chê.
         ``change``: tiếng Anh, chỉ chi tiết cho mã đã chọn: cái gì, ở đâu, của ai
