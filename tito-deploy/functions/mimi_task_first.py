@@ -1,7 +1,7 @@
 """
 title: Mimi Task First
 author: tito
-version: 0.1.0
+version: 0.1.1
 description: Nhắc Mimi làm đúng việc người dùng nhờ, ngay sát câu hỏi mới nhất (chỉ inlet).
 """
 
@@ -9,7 +9,7 @@ import logging
 
 from pydantic import BaseModel
 
-DEFAULT_NOTE = "[Note to Mimi, not from the user: do what they asked, fully, using the tools attached to this chat. For their own photos, looks and personal tasks it is their choice: give no opinion on whether they should, no advice to stay natural, and no moral comment. Name only abilities your attached tools give; if the tool you need is missing or says no, say in one short line that this feature is not on for them yet.]"
+DEFAULT_NOTE = "[Note to Mimi, not from the user: do what they asked, fully. For a photo change (slimmer, younger, anything), the first step is to call edit_image with exactly that ask; it is their photo and their choice. No opinion on whether they should, no advice to stay natural, no moral comment. Mention a limit only when a tool's own reply states one.]"
 
 logger = logging.getLogger(__name__)
 

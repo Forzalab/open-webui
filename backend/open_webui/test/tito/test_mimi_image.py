@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import threading
+import time
 import urllib.error
 import urllib.request
 import zlib
@@ -514,8 +515,9 @@ def test_status_events_bookend_http_and_done_on_failure(monkeypatch, tmp_path):
     assert asyncio.run(_edit(_tools(tmp_path), __event_emitter__=None)) == DONE_TEXT
 
 
-def test_errors_use_status_codes_and_incident_never_provider_body(monkeypatch, tmp_path, caplog):
-    # SOURCE: AC11 - 403 -> code+incident; timeout; empty; provider body never shown/logged.
+def test_errors_use_status_codes_and_incident_logs_body_never_shows_it(monkeypatch, tmp_path, caplog):
+    # SOURCE: AC11 + v0.4.1 SPEC 4 - 403 -> code+incident; timeout; empty; the body is
+    # logged for debugging but never shown to the user.
     _require()
     _patch_save(monkeypatch)
     err = urllib.error.HTTPError(module.API_URL, 403, 'Forbidden', {},
@@ -525,7 +527,7 @@ def test_errors_use_status_codes_and_incident_never_provider_body(monkeypatch, t
         out = asyncio.run(_edit(_tools(tmp_path)))
     assert re.fullmatch(r'Chưa sửa được ảnh \(mã 403\)\. \(mã lỗi T\d{4}-[0-9a-f]{4}\)', out)
     assert re.search(r'TITO-ERR T\d{4}-[0-9a-f]{4} mimi_image 403', caplog.text)
-    assert 'PROVIDER-ERR-BODY' not in out and 'PROVIDER-ERR-BODY' not in caplog.text
+    assert 'PROVIDER-ERR-BODY' not in out and 'PROVIDER-ERR-BODY' in caplog.text
     _patch_http(monkeypatch, error=TimeoutError())
     with caplog.at_level(logging.INFO):
         out = asyncio.run(_edit(_tools(tmp_path)))
@@ -712,4 +714,69 @@ def test_explicit_ask_beats_locked_base_on_beauty_path(monkeypatch, tmp_path):
     assert change in p
     assert ('HER OWN REQUEST, done in full on top of the retouch; for the parts it names '
             'it takes priority over the locked base, everything else as above: ') + change in p
+
+
+# --- v0.4.1: wait ticks + error body log ------------------------------------------
+
+
+def test_wait_ticker_emits_working_statuses_then_done(monkeypatch, tmp_path):
+    # SOURCE: v0.4.1 SPEC 1+2 - while the slow HTTP call runs, a ticker emits
+    # done=False wait statuses every TICK_SECONDS; the last status is done=True.
+    _require()
+    assert 'version: 0.4.1' in (module.__doc__ or '')
+    assert '"- ' not in (module.Tools.edit_image.__doc__ or '')
+    _patch_save(monkeypatch)
+
+    def slow_post(key, body, timeout):
+        time.sleep(0.25)
+        return {'data': [{'b64_json': B64}], 'usage': {'cost': 0.018}}
+
+    monkeypatch.setattr(module, '_post_image', slow_post)
+    monkeypatch.setattr(module, 'TICK_SECONDS', 0.05)
+    t = _tools(tmp_path)
+    cases = (
+        (lambda em: _edit(t, __event_emitter__=em),
+         'Mimi vẫn đang sửa hình, chờ Mimi chút nha…'),
+        (lambda em: _gen(t, __event_emitter__=em),
+         'Mimi vẫn đang vẽ hình, chờ Mimi chút nha…'),
+    )
+    for run, phrase in cases:
+        events = []
+        assert asyncio.run(run(_emitter(events))) in (DONE_TEXT, DONE_GEN_TEXT)
+        statuses = [e for e in events if e['type'] == 'status']
+        waits = [e for e in statuses if 'vẫn đang' in e['data']['description']]
+        assert len(waits) >= 2
+        assert all(e['data']['done'] is False for e in waits)
+        assert all(re.fullmatch(re.escape(phrase) + r' \(\d+ giây\)', e['data']['description'])
+                   for e in waits)
+        assert statuses[0]['data']['done'] is False
+        assert statuses[-1]['data']['done'] is True
+        assert statuses[-1]['data']['description'] != phrase
+        assert len(waits) == len(statuses) - 2  # start, wait ticks, done
+
+
+def test_http_error_logs_json_message_or_raw_body_never_user_text(monkeypatch, tmp_path, caplog):
+    # SOURCE: v0.4.1 SPEC 4 - HTTPError logs the first 200 chars of error.message
+    # (JSON) or of the raw body; the user text is unchanged and never carries it.
+    _require()
+    msg = 'quota exceeded for openai/gpt-image; retry later'
+    err = urllib.error.HTTPError(
+        module.API_URL, 429, 'Too Many Requests', {},
+        io.BytesIO(json.dumps({'error': {'message': msg}}).encode()),
+    )
+    _patch_http(monkeypatch, error=err)
+    with caplog.at_level(logging.ERROR):
+        out = asyncio.run(_edit(_tools(tmp_path)))
+    assert msg in caplog.text and msg not in out
+    assert re.fullmatch(r'Chưa sửa được ảnh \(mã 429\)\. \(mã lỗi T\d{4}-[0-9a-f]{4}\)', out)
+    assert KEY not in caplog.text
+    caplog.clear()
+    raw = b'UPSTREAM-RAW-ERROR ' + b'x' * 400
+    err = urllib.error.HTTPError(module.API_URL, 502, 'Bad Gateway', {}, io.BytesIO(raw))
+    _patch_http(monkeypatch, error=err)
+    with caplog.at_level(logging.ERROR):
+        out = asyncio.run(_gen(_tools(tmp_path)))
+    assert raw[:200].decode() in caplog.text
+    assert 'x' * 201 not in caplog.text
+    assert 'UPSTREAM-RAW-ERROR' not in out
 

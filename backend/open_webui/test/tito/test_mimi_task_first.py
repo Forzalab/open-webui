@@ -17,11 +17,11 @@ import pytest
 _FILTER_PATH = Path(__file__).resolve().parents[4] / 'tito-deploy' / 'functions' / 'mimi_task_first.py'
 
 NOTE = (
-    '[Note to Mimi, not from the user: do what they asked, fully, using the tools attached '
-    'to this chat. For their own photos, looks and personal tasks it is their choice: give '
-    'no opinion on whether they should, no advice to stay natural, and no moral comment. '
-    'Name only abilities your attached tools give; if the tool you need is missing or says '
-    'no, say in one short line that this feature is not on for them yet.]'
+    "[Note to Mimi, not from the user: do what they asked, fully. For a photo change "
+    "(slimmer, younger, anything), the first step is to call edit_image with exactly that "
+    "ask; it is their photo and their choice. No opinion on whether they should, no advice "
+    "to stay natural, no moral comment. Mention a limit only when a tool's own reply "
+    "states one.]"
 )
 
 IMAGE = {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,AAAA'}}
@@ -59,6 +59,7 @@ def _filter(**over):
 def test_exact_default_note_and_valves():
     # SOURCE: SPEC - DEFAULT_NOTE literal text; Valves defaults ENABLED=True, NOTE=DEFAULT_NOTE.
     _require()
+    assert 'version: 0.1.1' in (module.__doc__ or '')
     assert module.DEFAULT_NOTE == NOTE
     v = module.Filter.Valves()
     assert v.ENABLED is True and v.NOTE == NOTE
