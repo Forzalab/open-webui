@@ -1,7 +1,7 @@
 """
 title: Mimi Image
 author: tito
-version: 0.4.0
+version: 0.4.1
 description: Sửa ảnh đã gửi hoặc vẽ ảnh mới qua OpenRouter (Mimi + Tito).
 """
 
@@ -34,6 +34,10 @@ NO_PHOTO = 'Mình chưa thấy ảnh nào, bạn gửi ảnh lên giúp mình nh
 DONE_TEXT = 'Xong rồi, ảnh đã sửa ở trên nè.'
 DONE_GEN_TEXT = 'Xong rồi, ảnh ở trên nè.'
 HTTP_ERROR = 'Chưa sửa được ảnh (mã {code}).'
+
+TICK_SECONDS = 15
+WAIT_EDIT = 'Mimi vẫn đang sửa hình, chờ Mimi chút nha… ({n} giây)'
+WAIT_GENERATE = 'Mimi vẫn đang vẽ hình, chờ Mimi chút nha… ({n} giây)'
 
 EDIT_TEMPLATE = (
     "Edit this real photo so it still looks like an unedited camera photo.\n"
@@ -213,6 +217,30 @@ def _incident(detail: str) -> str:
     code = f'T{datetime.now(ZoneInfo("America/Los_Angeles")):%H%M}-{secrets.token_hex(2)}'
     logger.error('TITO-ERR %s mimi_image %s', code, detail)
     return code
+
+
+def _http_error_detail(e, *secrets) -> str:
+    """First 200 chars of the provider error.message, else of the raw body; never raises."""
+    try:
+        raw = e.read() or b''
+    except Exception:
+        return ''
+    text = raw.decode('utf-8', 'replace') if isinstance(raw, (bytes, bytearray)) else str(raw)
+    detail = ''
+    try:
+        payload = json.loads(text)
+    except Exception:
+        payload = None
+    if isinstance(payload, dict):
+        error = payload.get('error')
+        message = error.get('message') if isinstance(error, dict) else None
+        if isinstance(message, str):
+            detail = message
+    text = detail or text
+    for secret in secrets:
+        if secret:
+            text = text.replace(str(secret), '[redacted]')
+    return text[:200].strip()
 
 
 def _error(shown: object, code: str) -> str:
@@ -430,6 +458,20 @@ class Tools:
         desc = 'Mimi đang sửa hình…' if op == 'edit' else 'Mimi đang vẽ hình…'
         await _emit(emitter, _status(desc, False))
         ok, cost, out_bytes = 0, None, 0
+        ticker = None
+
+        async def _tick():
+            try:
+                while True:
+                    await asyncio.sleep(TICK_SECONDS)
+                    n = max(1, int(time.monotonic() - tick_started))
+                    text = (WAIT_EDIT if op == 'edit' else WAIT_GENERATE).replace('{n}', str(n))
+                    await _emit(emitter, _status(text, False))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+
         try:
             model = str(self.valves.MODEL)
             if model.startswith('openai/'):
@@ -443,6 +485,9 @@ class Tools:
                         'aspect_ratio': 'auto', 'resolution': self.valves.RESOLUTION}
             if input_ref is not None:
                 body['input_references'] = [{'type': 'image_url', 'image_url': {'url': input_ref}}]
+            tick_started = time.monotonic()
+            if emitter is not None:
+                ticker = asyncio.create_task(_tick())
             data = await asyncio.to_thread(_post_image, key, body, self.valves.TIMEOUT_SECONDS)
             usage = data.get('usage') if isinstance(data, dict) else None
             cost = usage.get('cost') if isinstance(usage, dict) else None
@@ -459,7 +504,11 @@ class Tools:
                 text = DONE_TEXT if op == 'edit' else DONE_GEN_TEXT
                 await _emit(emitter, {'type': 'files', 'data': {'files': [{'type': 'image', 'url': url}]}})
         except urllib.error.HTTPError as e:
-            text = _error(e.code, _incident(str(e.code)))
+            code = _incident(str(e.code))
+            detail = _http_error_detail(e, key, prompt, input_ref)
+            if detail:
+                logger.error('TITO-ERR %s mimi_image body %s', code, detail)
+            text = _error(e.code, code)
         except TimeoutError:
             text = _error('timeout', _incident('timeout'))
         except Exception as e:
@@ -468,6 +517,14 @@ class Tools:
             else:
                 text = _error('mạng', _incident(type(e).__name__))
         finally:
+            if ticker is not None:
+                ticker.cancel()
+                try:
+                    await ticker
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
             await _emit(emitter, _status(desc, True))
         _log_call(op, ok, started, cost, in_bytes, out_bytes)
         return text
@@ -487,7 +544,7 @@ class Tools:
         túi, tay ai, cột làm người nhìn to ra; arm = tay ép sát người; stranger = người
         lạ, đồ lỉnh kỉnh.
         other = ảnh KHÔNG cần làm đẹp người (cảnh, đồ vật) hoặc sửa thứ khác hẳn.
-        "- "nhìn mập/bụng to/tay to" mà KHÔNG nói muốn ốm hơn: chọn nguyên nhân trong ảnh (clothes/object/arm). Nếu họ NÓI muốn ốm hơn, thon hơn, trẻ hơn hay đổi dáng: viết đúng điều đó vào change, làm đúng ý họ, không bình luận."
+        nhìn mập/bụng to/tay to" mà KHÔNG nói muốn ốm hơn: chọn nguyên nhân trong ảnh (clothes/object/arm). Nếu họ NÓI muốn ốm hơn, thon hơn, trẻ hơn hay đổi dáng: viết đúng điều đó vào change, làm đúng ý họ, không bình luận."
         ``face``: chỉ khi làm đẹp người: tiếng Anh, một đoạn, tả khuôn mặt đúng như
         trong ảnh, không khen chê.
         ``change``: tiếng Anh, chỉ chi tiết cho mã đã chọn: cái gì, ở đâu, của ai
