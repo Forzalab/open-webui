@@ -209,6 +209,19 @@ def _to_jpeg(raw: bytes) -> tuple[bytes, int, int]:
         return out.getvalue(), rgb.width, rgb.height
 
 
+def _strip_metadata(png: bytes) -> bytes:
+    """Re-encode a PNG without metadata (C2PA caBX, EXIF, ICC); on failure return it unchanged."""
+    try:
+        with Image.open(io.BytesIO(png)) as img:
+            plain = img if img.mode in ('RGB', 'RGBA') else img.convert('RGB')
+            out = io.BytesIO()
+            plain.save(out, format='PNG')
+            return out.getvalue()
+    except Exception as e:
+        logger.warning('mimi_image strip failed %s', type(e).__name__)
+        return png
+
+
 _GPT_SIZES = ((1 / 1, '1:1', '1024x1024'), (3 / 2, '3:2', '1536x1024'), (2 / 3, '2:3', '1024x1536'))
 
 
@@ -339,6 +352,7 @@ class Tools:
                 text = _error('empty', _incident('empty'))
             else:
                 png = base64.b64decode(b64)
+                png = _strip_metadata(png)
                 out_bytes = len(png)
                 url = await _save_image(request, png, user, metadata or {})
                 _charge(spend_path, sk, price)

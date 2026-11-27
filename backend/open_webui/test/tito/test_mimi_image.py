@@ -17,6 +17,7 @@ import re
 import threading
 import urllib.error
 import urllib.request
+import zlib
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -563,3 +564,38 @@ def test_log_lines_have_cost_sizes_and_no_private_text(monkeypatch, tmp_path, ca
     assert len(lines) == 1
     assert re.match(r'^\[TITO\] mimi_image op=generate ok=1 secs=\d+\.\d cost=0\.018(?:\s|$)',
                     lines[0])
+
+
+def _png_with_cabx():
+    """Small RGB PNG with a fake 'caBX' chunk (payload 'openai c2pa') spliced after IHDR."""
+    buf = io.BytesIO()
+    Image.new('RGB', (8, 6), (10, 20, 30)).save(buf, format='PNG')
+    png = buf.getvalue()
+    payload = b'openai c2pa'
+    crc = zlib.crc32(b'caBX' + payload) & 0xFFFFFFFF
+    chunk = len(payload).to_bytes(4, 'big') + b'caBX' + payload + crc.to_bytes(4, 'big')
+    ihdr_end = 8 + 4 + 4 + 13 + 4  # signature + IHDR length/type/13-byte data/CRC
+    return png[:ihdr_end] + chunk + png[ihdr_end:]
+
+
+def test_strip_metadata_drops_cabx_chunk_and_keeps_size():
+    # SOURCE: SPEC 1+3 - the spliced caBX chunk (with 'openai') is gone after strip;
+    # the output still decodes as a PNG of the same size.
+    _require()
+    raw = _png_with_cabx()
+    assert b'caBX' in raw and b'openai' in raw
+    out = module._strip_metadata(raw)
+    assert b'caBX' not in out and b'openai' not in out
+    with Image.open(io.BytesIO(raw)) as before, Image.open(io.BytesIO(out)) as after:
+        assert after.size == before.size
+
+
+def test_strip_metadata_garbage_returns_original_and_warns(caplog):
+    # SOURCE: SPEC 1+3 - unreadable bytes come back unchanged; one warning names the
+    # exception type and never the image bytes.
+    _require()
+    junk = b'not a png openai c2pa'
+    with caplog.at_level(logging.WARNING):
+        assert module._strip_metadata(junk) == junk
+    assert 'mimi_image strip failed ' in caplog.text
+    assert 'openai' not in caplog.text
