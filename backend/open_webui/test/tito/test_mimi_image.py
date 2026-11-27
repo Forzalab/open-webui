@@ -317,7 +317,7 @@ def test_requests_are_exact_and_run_off_the_loop_thread(monkeypatch, tmp_path):
     assert set(body) == {'model', 'prompt', 'n', 'output_format', 'aspect_ratio',
                          'resolution', 'input_references'}
     assert body['model'] == 'bytedance-seed/seedream-5-0-flash-20261001'
-    assert body['prompt'] == module.build_edit_prompt('replace the sky with sunset')
+    assert body['prompt'] == module.build_neutral_prompt([], 'replace the sky with sunset')
     assert (body['n'], body['output_format'], body['aspect_ratio'], body['resolution']) == (1, 'png', 'auto', '2K')
     ref = body['input_references'][0]
     assert set(ref) == {'type', 'image_url'} and ref['type'] == 'image_url'
@@ -428,7 +428,7 @@ def test_edit_image_kind_and_face_dispatch(monkeypatch, tmp_path):
     msgs = [_msg('user', _jpeg_url())]
     assert asyncio.run(t.edit_image('swap the shirt color', kind='other', face='ignored',
                                     __user__=dict(USER), __messages__=msgs)) == DONE_TEXT
-    assert _body(captured)['prompt'] == module.build_edit_prompt('swap the shirt color')
+    assert _body(captured)['prompt'] == module.build_neutral_prompt([], 'swap the shirt color')
     for kind in (' xyz ', ''):
         captured = _patch_http(monkeypatch)
         assert asyncio.run(t.edit_image('smooth the skin', kind=kind, face='her face',
@@ -439,10 +439,12 @@ def test_edit_image_kind_and_face_dispatch(monkeypatch, tmp_path):
                                     __messages__=msgs)) == DONE_TEXT
     assert _body(captured)['prompt'] == module.build_beauty_prompt('her face', '')
     doc = module.Tools.edit_image.__doc__
-    for fact in ('Dùng cho MỌI yêu cầu sửa ảnh đã gửi', 'kind="beauty"', 'kind="other"',
-                 'Không chắc', 'CHỈ khi kind="beauty"', 'đốm nắng/nốt ruồi',
-                 'có thể để trống'):
+    for fact in ('Dùng cho MỌI yêu cầu sửa ảnh đã gửi', 'một hoặc hai mã', 'Mặc định "beauty"',
+                 'other = ảnh KHÔNG cần làm đẹp người', 'clothes/object/arm',
+                 'Không bao giờ làm người ốm đi', 'chỉ khi làm đẹp người',
+                 'the black bag strap across her chest'):
         assert fact in doc, fact
+    assert len(doc.strip().splitlines()) <= 25
     assert 'không bao giờ mô tả khuôn mặt' not in doc
 
 
@@ -599,3 +601,98 @@ def test_strip_metadata_garbage_returns_original_and_warns(caplog):
         assert module._strip_metadata(junk) == junk
     assert 'mimi_image strip failed ' in caplog.text
     assert 'openai' not in caplog.text
+
+
+# --- v0.4.0: locked edit recipes -------------------------------------------------
+
+
+def _prompt(monkeypatch, tmp_path, **kw):
+    """Run one edit_image call and return the prompt the provider would receive."""
+    t = _tools(tmp_path)
+    captured = _patch_http(monkeypatch)
+    _patch_save(monkeypatch)
+    assert asyncio.run(_edit(t, **kw)) == DONE_TEXT
+    return _body(captured)['prompt']
+
+
+def test_kind_parse_keeps_order_dedupes_and_caps_recipes():
+    # SOURCE: v0.4 SPEC 3 - comma string, strip/lower, drop empty and unknown keys,
+    # keep order, dedupe, at most two recipe keys; no valid key -> beauty.
+    _require()
+    assert module.parse_kind('dim,clothes') == ['dim', 'clothes']
+    assert module.parse_kind(' dim , zzz , HAZE , cast ') == ['dim', 'haze']
+    assert module.parse_kind('dim,dim,haze') == ['dim', 'haze']
+    assert module.parse_kind('other,dim,haze,cast') == ['other', 'dim', 'haze']
+    assert module.parse_kind('beauty,other') == ['beauty', 'other']
+    for blank in ('', '   ', 'zzz', None):
+        assert module.parse_kind(blank) == ['beauty']
+
+
+def test_beauty_with_recipes_inserts_6b_before_final_check(monkeypatch, tmp_path):
+    # SOURCE: v0.4 SPEC 3 - kind="dim,clothes" stays on prompt S; block 6b sits right
+    # before step 7, one bullet per recipe in order, THE LOCKED BASE untouched.
+    _require()
+    p = _prompt(monkeypatch, tmp_path, change='', kind='dim,clothes', face='her face')
+    assert 'THE LOCKED BASE' in p
+    assert '6b.' in p
+    assert module.RECIPES['dim'] in p and module.RECIPES['clothes'] in p
+    block = ('6b. Also, as part of this same retouch (for this item only, it takes priority '
+             'over the locked base):\n- ' + module.RECIPES['dim'] + '\n- '
+             + module.RECIPES['clothes'] + '\n')
+    assert block in p
+    assert p.index(block) < p.index('7. Final check')
+    assert p.count('7. Final check') == 1
+    assert p.index(module.RECIPES['dim']) < p.index(module.RECIPES['clothes'])
+    assert 'HER FACE, AS PHOTOGRAPHED (the reference for the locked base): her face' in p
+
+
+def test_other_recipe_uses_neutral_frame(monkeypatch, tmp_path):
+    # SOURCE: v0.4 SPEC 3+4 - "other,haze" -> wrapper frame with a numbered fix and the
+    # KEEP, edge for edge list; prompt S and its locked base must not appear.
+    _require()
+    p = _prompt(monkeypatch, tmp_path, change='', kind='other,haze')
+    assert p.startswith('You are a senior photo retoucher working on a real family photo.')
+    assert 'THE FIX:\n1. ' + module.RECIPES['haze'] + '\n\nKEEP, edge for edge' in p
+    assert 'THE LOCKED BASE' not in p and '6b.' not in p and 'HER OWN REQUEST' not in p
+    assert p.endswith('OUTPUT: a realistic photograph with real texture and true-to-life '
+                      'phone-camera colors, no glamorization.\n')
+    q = _prompt(monkeypatch, tmp_path, change='', kind='other')
+    assert ('THE FIX:\nKeep the photo as it is, with a light natural clean-up of exposure '
+            'and color.\n\nKEEP, edge for edge') in q
+    assert 'THEIR OWN REQUEST' not in q
+
+
+def test_unknown_extra_kind_keys_use_only_the_first_two_recipes(monkeypatch, tmp_path):
+    # SOURCE: v0.4 SPEC 3 - "dim,zzz,haze,cast": the unknown key is dropped and cast is a
+    # third recipe, so only dim and haze survive, in that order.
+    _require()
+    p = _prompt(monkeypatch, tmp_path, change='', kind='dim,zzz,haze,cast')
+    assert module.RECIPES['dim'] in p and module.RECIPES['haze'] in p
+    assert module.RECIPES['cast'] not in p
+    assert p.index(module.RECIPES['dim']) < p.index(module.RECIPES['haze'])
+
+
+def test_change_text_with_braces_and_percent_survives_on_both_paths(monkeypatch, tmp_path):
+    # SOURCE: v0.4 SPEC 3 - str.replace only, never .format: {braces}, %(x)s, 100% and
+    # bracket placeholders must reach the prompt untouched on beauty and neutral paths.
+    _require()
+    change = 'remove {the} strap, keep %(x)s 100% and [the] wall'
+    p = _prompt(monkeypatch, tmp_path, change=change, kind='beauty,object', face='a face with {curly}')
+    assert 'a face with {curly}' in p
+    assert 'HER OWN REQUEST, done on top of the retouch, everything else as above: ' + change in p
+    assert module.RECIPES['object'] in p
+    q = _prompt(monkeypatch, tmp_path, change=change, kind='other,object')
+    assert 'THEIR OWN REQUEST: ' + change in q
+    assert module.RECIPES['object'] in q
+
+
+def test_default_kind_is_v03_beauty_output_without_recipe_block(monkeypatch, tmp_path):
+    # SOURCE: v0.4 SPEC 3 - no kind, or only beauty/unknown keys, is exactly the v0.3
+    # beauty prompt with no 6b block.
+    _require()
+    expected = module.build_beauty_prompt('her face', 'smooth the skin')
+    for kind in ('beauty', 'beauty,zzz', '', 'nope'):
+        p = _prompt(monkeypatch, tmp_path, change='smooth the skin', face='her face', kind=kind)
+        assert p == expected
+        assert '6b.' not in p
+

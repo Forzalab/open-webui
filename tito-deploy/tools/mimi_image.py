@@ -1,7 +1,7 @@
 """
 title: Mimi Image
 author: tito
-version: 0.3.0
+version: 0.4.0
 description: Sửa ảnh đã gửi hoặc vẽ ảnh mới qua OpenRouter (Mimi + Tito).
 """
 
@@ -78,6 +78,81 @@ BEAUTY_TEMPLATE = (
 )
 
 
+RECIPES = {
+    'haze': (
+        "Clear the haze the way a Lightroom dehaze with a small black-point adjustment does: the darkest tones a little deeper, natural midtone contrast and clear true colors back, while distant scenery keeps its soft natural depth."
+    ),
+    'dim': (
+        "Lift the exposure on the people and the deep shadows by about one stop, as a local exposure lift, so faces and skin show true detail and natural color; the scene keeps its evening or indoor light, warm lamps and darker background mood, with clean low noise and a fine natural grain."
+    ),
+    'backlight': (
+        "Add soft fill light to [whose] face, as a gentle dodge with lifted shadows, so eyes, nose and cheeks read evenly and clearly, while the original sun direction, the bright rim of light and the sky stay as they are, with highlights recovered."
+    ),
+    'cast': (
+        "Correct the [orange/blue/green] light cast on the skin with a white-balance fix on the skin tones only, giving natural healthy skin within half a shade of the person's own tone; the scene's light, clothing colors and mood stay as photographed."
+    ),
+    'sharpen': (
+        "Apply gentle capture sharpening, as a pro does right after the shot, so eyes, hair and clothing edges look crisp and natural at true phone-photo detail, with clean edges."
+    ),
+    'clothes': (
+        "Tidy the clothing as a garment cleanup: relax the wrinkles and bunched folds at [area, e.g. the waist and belly of the orange dress] so the fabric drapes smoothly and evenly, with the same color, print, seams, hemline and fit; the folds are flattened in tone, as a light dodge and burn, while every outline stays where it is."
+    ),
+    'object': (
+        "Remove [object + where, e.g. the black bag strap across her chest] and rebuild the clothing and background behind it naturally, continuing the fabric, print, wall and floor lines; where it pulled or pressed on the clothes, the fabric falls smooth again."
+    ),
+    'arm': (
+        "Soften the shadow and the small fold where [whose] arm presses against the body, as a light dodge and burn, so the arm and side read clean; the arm stays in its exact position and outline."
+    ),
+    'stranger': (
+        "Remove [who/what + where, e.g. the man in the blue shirt at the left edge] and fill the space with the surrounding background in matching perspective, light and grain; everyone else and the whole scene stay as they are."
+    ),
+}
+
+NEUTRAL_TEMPLATE = (
+    "You are a senior photo retoucher working on a real family photo. The job is a light, invisible fix, the kind a pro finishes in fifteen minutes: the result reads as the same unedited phone photo, taken on a better moment.\n"
+    "\n"
+    "THE FIX:\n"
+    "{recipe lines, numbered, max 2}\n"
+    "{optional: THEIR OWN REQUEST: <change>}\n"
+    "\n"
+    "KEEP, edge for edge with the original: every face and its features, expression and age; skin with its pores, fine lines and natural uneven tone; body shape and outline; pose, arms and hands; hair; clothing design, color, print and fit; every person and object in the background; camera angle, framing, crop and aspect ratio; focus and grain; and the color temperature of the photo, except where the fix itself names a change.\n"
+    "\n"
+    "OUTPUT: a realistic photograph with real texture and true-to-life phone-camera colors, no glamorization.\n"
+)
+
+_NEUTRAL_FIX_SLOT = '{recipe lines, numbered, max 2}\n'
+_NEUTRAL_REQUEST_SLOT = '{optional: THEIR OWN REQUEST: <change>}\n'
+_NEUTRAL_KEEP_SENTENCE = 'Keep the photo as it is, with a light natural clean-up of exposure and color.'
+
+
+def parse_kind(kind: str) -> list[str]:
+    """Comma-separated kind string -> ordered, deduped keys; at most two recipe keys; default beauty."""
+    picked = []
+    recipes = 0
+    for raw in str(kind or '').split(','):
+        key = raw.strip().lower()
+        if not key or key in picked:
+            continue
+        if key in RECIPES:
+            if recipes >= 2:
+                continue
+            recipes += 1
+        elif key not in ('beauty', 'other'):
+            continue
+        picked.append(key)
+    return picked or ['beauty']
+
+
+def _recipe_keys(keys) -> list[str]:
+    """Recipe keys only, in order, deduped, at most two."""
+    out = []
+    for key in keys or ():
+        k = str(key).strip().lower()
+        if k in RECIPES and k not in out:
+            out.append(k)
+    return out[:2]
+
+
 def build_edit_prompt(change: str) -> str:
     """Locked short edit prompt; the change text is inserted literally (str.replace, never .format)."""
     c = (change or '').strip()
@@ -86,8 +161,8 @@ def build_edit_prompt(change: str) -> str:
     return EDIT_TEMPLATE.replace('Change only: {change}\n', 'Change only: ' + c + '\n')
 
 
-def build_beauty_prompt(face: str, change: str) -> str:
-    """Locked retouch prompt; face and change are inserted literally (str.replace, never .format)."""
+def build_beauty_prompt(face: str, change: str, keys=()) -> str:
+    """Locked retouch prompt; face, change and recipe lines are inserted literally (str.replace, never .format)."""
     f = (face or '').strip()
     c = (change or '').strip()
     prompt = BEAUTY_TEMPLATE
@@ -101,7 +176,29 @@ def build_beauty_prompt(face: str, change: str) -> str:
             'HER OWN REQUEST, done on top of the retouch, everything else as above: '
             + c + '\n\nOUTPUT: ',
         )
+    recipes = _recipe_keys(keys)
+    if recipes:
+        block = (
+            '6b. Also, as part of this same retouch (for this item only, it takes priority over the locked base):\n'
+            + ''.join('- ' + RECIPES[k] + '\n' for k in recipes)
+        )
+        prompt = prompt.replace('7. Final check', block + '7. Final check', 1)
     return prompt
+
+
+def build_neutral_prompt(keys, change: str = '') -> str:
+    """Locked neutral edit prompt; recipe lines and change are inserted literally (str.replace, never .format)."""
+    c = (change or '').strip()
+    recipes = _recipe_keys(keys)
+    if recipes:
+        fix = '\n'.join(f'{i}. {RECIPES[k]}' for i, k in enumerate(recipes, 1)) + '\n'
+    elif c:
+        fix = ''
+    else:
+        fix = _NEUTRAL_KEEP_SENTENCE + '\n'
+    prompt = NEUTRAL_TEMPLATE.replace(_NEUTRAL_FIX_SLOT, fix)
+    request = ('THEIR OWN REQUEST: ' + c + '\n') if c else ''
+    return prompt.replace(_NEUTRAL_REQUEST_SLOT, request)
 
 
 def build_generate_prompt(description: str) -> str:
@@ -377,17 +474,23 @@ class Tools:
                          __user__=None, __request__=None, __event_emitter__=None,
                          __messages__=None, __files__=None, __metadata__=None) -> str:
         """
-        Sửa ảnh mà người dùng vừa gửi kèm trong chat.
+        Sửa ảnh mà người dùng đã gửi trong chat.
 
-        Dùng cho MỌI yêu cầu sửa ảnh đã gửi.
-        ``kind``: dùng kind="beauty" khi yêu cầu là làm đẹp chính người trong ảnh
-        (da, mắt, tóc, trông tươi tắn, đỡ mệt, trẻ hơn); kind="other" cho sửa khác
-        (đổi nền, xóa vật, đổi màu áo...). Không chắc -> "beauty".
-        ``face``: CHỈ khi kind="beauty". Tiếng Anh, một đoạn, tả khuôn mặt ĐÚNG như
-        trong ảnh: dáng mặt, gò má, cằm, trán và đường chân tóc, lông mày, mắt và mí,
-        mũi, môi, màu da, đốm nắng/nốt ruồi. Chỉ tả, không khen chê, không đề xuất
-        thay đổi.
-        ``change``: tiếng Anh, CHỈ phần người dùng muốn đổi; với beauty có thể để trống.
+        Dùng cho MỌI yêu cầu sửa ảnh đã gửi. Luôn sửa từ ảnh GỐC người dùng gửi.
+        ``kind``: một hoặc hai mã, cách nhau dấu phẩy. Mặc định "beauty" (làm đẹp nhẹ
+        người trong ảnh, luôn có).
+        haze = ảnh mờ, nhạt màu, như có sương; dim = tối, thiếu sáng, ban đêm;
+        backlight = ngược sáng, mặt tối; cast = da bị vàng/cam/xanh do đèn;
+        sharpen = ảnh hơi nhòe; clothes = áo nhăn, nhúm ở bụng/eo; object = dây túi,
+        túi, tay ai, cột làm người nhìn to ra; arm = tay ép sát người; stranger = người
+        lạ, đồ lỉnh kỉnh.
+        other = ảnh KHÔNG cần làm đẹp người (cảnh, đồ vật) hoặc sửa thứ khác hẳn.
+        "nhìn mập/bụng to/tay to": nhìn ảnh, chọn nguyên nhân (clothes/object/arm).
+        Không bao giờ làm người ốm đi.
+        ``face``: chỉ khi làm đẹp người: tiếng Anh, một đoạn, tả khuôn mặt đúng như
+        trong ảnh, không khen chê.
+        ``change``: tiếng Anh, chỉ chi tiết cho mã đã chọn: cái gì, ở đâu, của ai
+        (ví dụ "the black bag strap across her chest").
         """
         started = time.monotonic()
         key, refused = self._gate('edit', __user__, started)
@@ -402,8 +505,12 @@ class Tools:
         except Exception as e:
             _log_call('edit', 0, started, None, len(raw), 0)
             return _error('mạng', _incident(type(e).__name__))
-        k = (kind or '').strip().lower()
-        prompt = build_edit_prompt(change) if k == 'other' else build_beauty_prompt(face, change)
+        keys = parse_kind(kind)
+        recipes = [k for k in keys if k in RECIPES]
+        if 'other' in keys:
+            prompt = build_neutral_prompt(recipes, change)
+        else:
+            prompt = build_beauty_prompt(face, change, recipes)
         return await self._run_http(
             'edit', key, prompt, _data_url(jpeg), len(jpeg),
             __user__, __request__, __event_emitter__, __metadata__, started, (w, h),
