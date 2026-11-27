@@ -188,12 +188,13 @@ def _spend(path):
 
 
 def test_valve_defaults_are_exact():
-    # SOURCE: AC valves - names and literal defaults (v2 model/price).
+    # SOURCE: AC valves - names and literal defaults (v3 GPT flare model/price).
     _require()
     v = module.Tools().Valves()
-    assert (v.ENABLED, v.MODEL, v.RESOLUTION, v.OPENROUTER_API_KEY, v.PRICE_PER_IMAGE_USD,
-            v.DAILY_CAP_USD, v.ALLOWED_USER_IDS, v.SPEND_FILE, v.TIMEOUT_SECONDS) == (
-        False, 'bytedance-seed/seedream-5-5-20261112', '2K', '', 0.045, 1.0, '', '', 120)
+    assert (v.ENABLED, v.MODEL, v.QUALITY, v.COMPLEXITY, v.RESOLUTION, v.OPENROUTER_API_KEY,
+            v.PRICE_PER_IMAGE_USD, v.DAILY_CAP_USD, v.ALLOWED_USER_IDS, v.SPEND_FILE,
+            v.TIMEOUT_SECONDS) == (
+        False, 'openai/gpt-image-2.6-flare', 'medium', 'low', '2K', '', 0.06, 1.0, '', '', 120)
 
 
 def test_disabled_and_missing_key_make_no_http_call(monkeypatch, tmp_path):
@@ -304,7 +305,7 @@ def test_requests_are_exact_and_run_off_the_loop_thread(monkeypatch, tmp_path):
     captured = _patch_http(monkeypatch)
     _patch_save(monkeypatch)
     t = _tools(tmp_path, TIMEOUT_SECONDS=7)
-    assert asyncio.run(_edit(t, 'replace the sky with sunset', __request__=REQ)) == DONE_TEXT
+    assert asyncio.run(_edit(t, 'replace the sky with sunset', kind='other', __request__=REQ)) == DONE_TEXT
     assert captured['calls'] == 1 and captured['timeout'] == 7
     assert captured['thread'] != main_tid
     req = captured['req']
@@ -328,22 +329,137 @@ def test_requests_are_exact_and_run_off_the_loop_thread(monkeypatch, tmp_path):
 
 
 def test_prompt_builders_are_locked():
-    # SOURCE: AC8 v2 - positive-only template; empty change drops the Change line.
+    # SOURCE: AC8 v3 - short positive edit template; empty change drops the Change line.
     _require()
     change = 'replace the background with a beach'
     p = module.build_edit_prompt(change)
-    assert p.startswith('Retouch this real photo') and p.endswith('clear natural sky.')
-    assert p.count('Change: ' + change) == 1
-    for fact in ('Same person, same face', 'healthy, warm, natural skin tone',
-                 'slightly smoother and more even'):
+    assert p.startswith('Edit this real photo so it still looks like an unedited camera photo.')
+    assert p.endswith('OUTPUT: a realistic photograph, true-to-life phone-camera look.')
+    assert p.count('Change only: ' + change) == 1
+    for fact in ('Keep everything else exactly as photographed', 'same person, same face',
+                 'same background, same framing', 'same colors and light'):
         assert fact in p
     for empty in ('', '   '):
         q = module.build_edit_prompt(empty)
-        assert 'Change:' not in q
+        assert 'Change only:' not in q
         for bad in ('do not', "don't", 'never', ' no ', 'not ', 'avoid', 'without'):
             assert bad not in q.lower(), bad
     assert module.build_generate_prompt('a cat') == (
         'a cat\nPhotorealistic, natural colors, like a good modern phone photo.')
+
+
+def test_gpt_default_and_body(monkeypatch, tmp_path):
+    # SOURCE: v0.3 - default MODEL is the GPT flare; GPT bodies carry quality/size/aspect
+    # plus provider complexity from the valves; generate has no input and is 1:1/1024.
+    _require()
+    v = module.Tools.Valves()
+    assert (v.MODEL, v.QUALITY, v.COMPLEXITY) == ('openai/gpt-image-2.6-flare', 'medium', 'low')
+    captured = _patch_http(monkeypatch)
+    _patch_save(monkeypatch)
+    t = _tools(tmp_path, MODEL='openai/gpt-image-2.6-flare')
+    assert asyncio.run(_edit(t, __messages__=[_msg('user', _jpeg_url((60, 40)))])) == DONE_TEXT
+    body = _body(captured)
+    assert set(body) == {'model', 'prompt', 'n', 'output_format', 'aspect_ratio',
+                         'size', 'quality', 'provider', 'input_references'}
+    assert (body['model'], body['n'], body['output_format']) == ('openai/gpt-image-2.6-flare', 1, 'png')
+    assert (body['aspect_ratio'], body['size']) == ('3:2', '1536x1024')
+    assert (body['quality'], body['provider']) == (
+        'medium', {'options': {'openai': {'complexity': 'low'}}})
+    assert body['prompt'] == module.build_beauty_prompt('', 'sửa nhẹ')
+    captured = _patch_http(monkeypatch)
+    t = _tools(tmp_path, MODEL='openai/gpt-image-2.6-flare', QUALITY='high', COMPLEXITY='high')
+    assert asyncio.run(_gen(t, 'a cat')) == DONE_GEN_TEXT
+    body = _body(captured)
+    assert set(body) == {'model', 'prompt', 'n', 'output_format', 'aspect_ratio', 'size',
+                         'quality', 'provider'}
+    assert (body['aspect_ratio'], body['size']) == ('1:1', '1024x1024')
+    assert (body['quality'], body['provider']['options']['openai']['complexity']) == ('high', 'high')
+    assert body['prompt'] == module.build_generate_prompt('a cat')
+
+
+def test_gpt_size_picks_closest_ratio():
+    # SOURCE: v0.3 - square, 9:16 portrait and 16:9 landscape map to the GPT sizes.
+    _require()
+    assert module._gpt_size(1024, 1024) == ('1:1', '1024x1024')
+    assert module._gpt_size(1080, 1920) == ('2:3', '1024x1536')
+    assert module._gpt_size(1920, 1080) == ('3:2', '1536x1024')
+
+
+def test_beauty_prompt_has_face_and_locked_base():
+    # SOURCE: v0.3 - face text lands literally after the label; empty face drops the
+    # whole HER FACE paragraph and its blank line; locked base text remains intact.
+    _require()
+    face = 'an oval face, wide cheekbones, a low nose bridge, full lips'
+    p = module.build_beauty_prompt(face, '')
+    assert p.startswith('You are a senior studio portrait retoucher')
+    assert 'HER FACE, AS PHOTOGRAPHED (the reference for the locked base): ' + face + '\n\n' in p
+    assert 'THE LOCKED BASE (everything here stays as photographed' in p
+    assert p.endswith('OUTPUT: a realistic photograph with the original colors, contrast and '
+                      'sharpness, a true-to-life phone-camera look.\n')
+    assert '\n\n\n' not in p
+    q = module.build_beauty_prompt('', '')
+    assert 'HER FACE' not in q and 'oval, softly square face' not in q
+    assert 'THE LOCKED BASE' in q and '\n\n\n' not in q
+
+
+def test_beauty_prompt_change_before_output_braces_literal():
+    # SOURCE: v0.3 - change paragraph goes right before OUTPUT; braces/% survive
+    # (str.replace, never .format); blank change adds no request paragraph.
+    _require()
+    face = 'face with {braces} and %s'
+    change = 'make {the} eyes brighter, keep %(x)s'
+    p = module.build_beauty_prompt(face, change)
+    assert p.count(face) == 1 and p.count(change) == 1
+    ask = 'HER OWN REQUEST, done on top of the retouch, everything else as above: ' + change
+    assert ask + '\n\nOUTPUT: ' in p
+    assert p.index('THE RETOUCH') < p.index(ask) < p.index('OUTPUT:')
+    q = module.build_beauty_prompt(face, '   ')
+    assert 'HER OWN REQUEST' not in q and face in q
+
+
+def test_edit_image_kind_and_face_dispatch(monkeypatch, tmp_path):
+    # SOURCE: v0.3 - kind 'other' -> short template (face ignored); unknown/blank -> beauty;
+    # default kind is beauty; the docstring tells Mimi the new contract.
+    _require()
+    captured = _patch_http(monkeypatch)
+    _patch_save(monkeypatch)
+    t = _tools(tmp_path)  # non-openai on purpose: prompt dispatch is model-independent
+    msgs = [_msg('user', _jpeg_url())]
+    assert asyncio.run(t.edit_image('swap the shirt color', kind='other', face='ignored',
+                                    __user__=dict(USER), __messages__=msgs)) == DONE_TEXT
+    assert _body(captured)['prompt'] == module.build_edit_prompt('swap the shirt color')
+    for kind in (' xyz ', ''):
+        captured = _patch_http(monkeypatch)
+        assert asyncio.run(t.edit_image('smooth the skin', kind=kind, face='her face',
+                                        __user__=dict(USER), __messages__=msgs)) == DONE_TEXT
+        assert _body(captured)['prompt'] == module.build_beauty_prompt('her face', 'smooth the skin')
+    captured = _patch_http(monkeypatch)
+    assert asyncio.run(t.edit_image(face='her face', __user__=dict(USER),
+                                    __messages__=msgs)) == DONE_TEXT
+    assert _body(captured)['prompt'] == module.build_beauty_prompt('her face', '')
+    doc = module.Tools.edit_image.__doc__
+    for fact in ('Dùng cho MỌI yêu cầu sửa ảnh đã gửi', 'kind="beauty"', 'kind="other"',
+                 'Không chắc', 'CHỈ khi kind="beauty"', 'đốm nắng/nốt ruồi',
+                 'có thể để trống'):
+        assert fact in doc, fact
+    assert 'không bao giờ mô tả khuôn mặt' not in doc
+
+
+def test_non_openai_model_keeps_old_body(monkeypatch, tmp_path):
+    # SOURCE: v0.3 - MODEL valve without the openai/ prefix keeps the v2 body exactly
+    # (aspect 'auto' + resolution), so rollback is a one-valve change.
+    _require()
+    captured = _patch_http(monkeypatch)
+    _patch_save(monkeypatch)
+    t = _tools(tmp_path, MODEL='bytedance-seed/seedream-5-0-flash-20261001')
+    assert asyncio.run(_edit(t, 'change it')) == DONE_TEXT
+    body = _body(captured)
+    assert set(body) == {'model', 'prompt', 'n', 'output_format', 'aspect_ratio',
+                         'resolution', 'input_references'}
+    assert (body['model'], body['aspect_ratio'], body['resolution']) == (
+        'bytedance-seed/seedream-5-0-flash-20261001', 'auto', '2K')
+    for absent in ('size', 'quality', 'provider'):
+        assert absent not in body
 
 
 def test_success_saves_png_emits_file_and_returns_done(monkeypatch, tmp_path):

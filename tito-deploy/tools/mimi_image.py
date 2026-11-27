@@ -1,7 +1,7 @@
 """
 title: Mimi Image
 author: tito
-version: 0.2.1
+version: 0.3.0
 description: Sửa ảnh đã gửi hoặc vẽ ảnh mới qua OpenRouter (Mimi + Tito).
 """
 
@@ -10,6 +10,7 @@ import base64
 import io
 import json
 import logging
+import math
 import os
 import secrets
 import time
@@ -35,22 +36,72 @@ DONE_GEN_TEXT = 'Xong rồi, ảnh ở trên nè.'
 HTTP_ERROR = 'Chưa sửa được ảnh (mã {code}).'
 
 EDIT_TEMPLATE = (
-    "Retouch this real photo of a Vietnamese person so it still looks like an unedited camera photo, ready for Facebook.\n"
-    "Change: {change}\n"
-    "Also: skin slightly smoother and more even, with natural pores and texture.\n"
-    "Same person, same face, same expression, same pose, same clothes, same background, same framing.\n"
-    "Colors: bright, clear and true to life, like a good modern phone photo; healthy, warm, natural skin tone; clear natural sky."
+    "Edit this real photo so it still looks like an unedited camera photo.\n"
+    "Change only: {change}\n"
+    "Keep everything else exactly as photographed: same person, same face, same expression, "
+    "same pose, same clothes, same background, same framing, same colors and light.\n"
+    "OUTPUT: a realistic photograph, true-to-life phone-camera look."
 )
 
 GEN_SUFFIX = 'Photorealistic, natural colors, like a good modern phone photo.'
 
+_BEAUTY_FACE_LABEL = "HER FACE, AS PHOTOGRAPHED (the reference for the locked base): "
+
+BEAUTY_FACE = (
+    "an oval, softly square face with wide cheekbones and a soft jaw; a high smooth forehead with a center-parted hairline; medium-thick dark eyebrows in a low soft arch, sitting close to the eyes; almond-shaped eyes with partly hooded upper lids, a low crease and dark-brown irises; a low-to-medium nose bridge with a wide base and a rounded tip; full cheeks that rise with her smile, with clear smile lines from nose to mouth corners; medium-full lips with a thinner upper lip in a warm coral-rose; medium warm golden-olive skin with scattered sunspots on cheeks and nose and visible pores."
+)
+
+BEAUTY_TEMPLATE = (
+    "You are a senior studio portrait retoucher working on a real family photo of a Vietnamese woman. The job is a light, invisible retouch, the kind a magazine retoucher finishes in fifteen minutes on a good photo: the result reads as the same camera photo, taken on a day when she slept well and wore a little everyday makeup. Her own family will look at it, so she stays exactly the woman they know.\n"
+    "\n"
+    + _BEAUTY_FACE_LABEL
+    + BEAUTY_FACE
+    + "\n"
+    "\n"
+    "THE LOCKED BASE (everything here stays as photographed, lined up edge for edge with the original):\n"
+    "- Face geometry: the outline of her face; the width of her cheekbones and of her jaw; the length of her face; her chin; the width, bridge, tip and nostrils of her nose; the shape of her eyes; her eyelids and their creases; the distance between her eyes; the shape and fullness of her lips, her cupid's bow and the width of her mouth; her smile and teeth; her ears; every proportion between these features; and the natural asymmetry of her face, one side slightly different from the other, exactly as it is.\n"
+    "- Character: her real age; her expression; the smile lines that come with her smile and the small lines at the corners of her eyes, present and a little softer; her moles, freckles, freckle clusters, sunspots, scars and beauty marks, the same count, each in its own place and size relative to her eyes and nose.\n"
+    "- Eyebrows: dark, full and bold, in their own shape, thickness and position.\n"
+    "- Surface and color: her own warm golden-olive skin tone, a touch more luminous and within half a shade of the photo, matching across face, neck, arms and hands; visible pores; fine natural texture; her own eye color; her own eyebrow color; the natural color of her cheeks.\n"
+    "- Everything else: hair length, parting, volume and loose strands; pose and hands; clothing; everything she wears on her face or head, exactly as it is; the whole background with its people, signs and objects; framing, crop, camera angle, light direction, focus and grain.\n"
+    "\n"
+    "THE RETOUCH, step by step, as thin layers on top of the locked base:\n"
+    "1. Frequency separation. On the color-and-tone layer, calm the shine on forehead and nose and the passing redness beside the nose. Her sunspots, freckle clusters and permanent color patches stay in their places and shapes, each one a little lighter and softer. The texture layer stays as it is, so every pore and fine hair remains.\n"
+    "2. Dodge and burn at low opacity. Lift the shadow in the hollow under each eye and under each eye bag by about a third. Lift the shadows that sagging casts: along each smile line, at the corners of the mouth and under the jawline, by about a third, while every contour stays where it is. Soften the deepest part of each forehead line by about a third; the lines remain, shallower.\n"
+    "3. Spot healing for temporary marks only: a pimple, a scratch, a stray hair lying across the skin.\n"
+    "4. Eyes. Brighten the whites slightly, place one small soft catchlight in each iris, lift the shadow on the upper lids a little, and give the lash line a touch more definition. Her eyes are a touch more open, about five percent, as when she is rested and alert; eye shape, lid shape and the distance between her eyes stay as photographed.\n"
+    "5. A light makeup layer. A soft, broad, healthy glow on the top of the cheekbones and the bridge of the nose, smooth like moisturised skin; a whisper of peach blush; a sheer tint on the lips close to their own color.\n"
+    "6. Hair color. Grey and white strands blend into her own soft natural black with a cool undertone and a gentle sheen. The hair keeps its shape, volume and movement.\n"
+    "7. Final check, as the retoucher: flip between before and after. Tone, glow and hair color differ; every edge of her face lines up with the original.\n"
+    "\n"
+    "OUTPUT: a realistic photograph with the original colors, contrast and sharpness, a true-to-life phone-camera look.\n"
+)
+
 
 def build_edit_prompt(change: str) -> str:
-    """Locked edit prompt; the change text is inserted literally (str.replace, never .format)."""
+    """Locked short edit prompt; the change text is inserted literally (str.replace, never .format)."""
     c = (change or '').strip()
     if not c:
-        return EDIT_TEMPLATE.replace('Change: {change}\n', '')
-    return EDIT_TEMPLATE.replace('Change: {change}\n', 'Change: ' + c + '\n')
+        return EDIT_TEMPLATE.replace('Change only: {change}\n', '')
+    return EDIT_TEMPLATE.replace('Change only: {change}\n', 'Change only: ' + c + '\n')
+
+
+def build_beauty_prompt(face: str, change: str) -> str:
+    """Locked retouch prompt; face and change are inserted literally (str.replace, never .format)."""
+    f = (face or '').strip()
+    c = (change or '').strip()
+    prompt = BEAUTY_TEMPLATE
+    if f:
+        prompt = prompt.replace(_BEAUTY_FACE_LABEL + BEAUTY_FACE, _BEAUTY_FACE_LABEL + f)
+    else:
+        prompt = prompt.replace(_BEAUTY_FACE_LABEL + BEAUTY_FACE + '\n\n', '')
+    if c:
+        prompt = prompt.replace(
+            'OUTPUT: ',
+            'HER OWN REQUEST, done on top of the retouch, everything else as above: '
+            + c + '\n\nOUTPUT: ',
+        )
+    return prompt
 
 
 def build_generate_prompt(description: str) -> str:
@@ -149,13 +200,26 @@ def _last_user_image(messages) -> bytes | None:
     return None
 
 
-def _to_jpeg(raw: bytes) -> bytes:
-    """EXIF-transpose, RGB, JPEG q92: what the provider receives."""
+def _to_jpeg(raw: bytes) -> tuple[bytes, int, int]:
+    """EXIF-transpose, RGB, JPEG q92: what the provider receives, plus its pixel size."""
     with Image.open(io.BytesIO(raw)) as img:
         rgb = ImageOps.exif_transpose(img).convert('RGB')
         out = io.BytesIO()
         rgb.save(out, format='JPEG', quality=92)
-        return out.getvalue()
+        return out.getvalue(), rgb.width, rgb.height
+
+
+_GPT_SIZES = ((1 / 1, '1:1', '1024x1024'), (3 / 2, '3:2', '1536x1024'), (2 / 3, '2:3', '1024x1536'))
+
+
+def _gpt_size(w: int, h: int) -> tuple[str, str]:
+    """Closest GPT image aspect/size for a w x h photo, by |log(w/h) - log(ratio)|."""
+    try:
+        target = math.log(float(w) / float(h))
+    except (TypeError, ValueError, ZeroDivisionError):
+        return '1:1', '1024x1024'
+    _, aspect_ratio, size = min(_GPT_SIZES, key=lambda item: abs(target - math.log(item[0])))
+    return aspect_ratio, size
 
 
 def _data_url(jpeg: bytes) -> str:
@@ -213,10 +277,12 @@ async def _save_image(request, png_bytes: bytes, user, metadata) -> str:
 class Tools:
     class Valves(BaseModel):
         ENABLED: bool = False
-        MODEL: str = 'bytedance-seed/seedream-5-5-20261112'
+        MODEL: str = 'openai/gpt-image-2.6-flare'
         RESOLUTION: str = '2K'
+        QUALITY: str = 'medium'
+        COMPLEXITY: str = 'low'
         OPENROUTER_API_KEY: str = ''
-        PRICE_PER_IMAGE_USD: float = 0.045
+        PRICE_PER_IMAGE_USD: float = 0.06
         DAILY_CAP_USD: float = 1.0
         ALLOWED_USER_IDS: str = ''
         SPEND_FILE: str = ''
@@ -239,7 +305,8 @@ class Tools:
             return None, NOT_ALLOWED
         return key, None
 
-    async def _run_http(self, op, key, prompt, input_ref, in_bytes, user, request, emitter, metadata, started):
+    async def _run_http(self, op, key, prompt, input_ref, in_bytes, user, request, emitter, metadata,
+                        started, dims=None):
         spend_path = _spend_path(self.valves.SPEND_FILE)
         sk = _spend_key(user)
         price = float(self.valves.PRICE_PER_IMAGE_USD)
@@ -252,8 +319,16 @@ class Tools:
         await _emit(emitter, _status(desc, False))
         ok, cost, out_bytes = 0, None, 0
         try:
-            body = {'model': self.valves.MODEL, 'prompt': prompt, 'n': 1, 'output_format': 'png',
-                    'aspect_ratio': 'auto', 'resolution': self.valves.RESOLUTION}
+            model = str(self.valves.MODEL)
+            if model.startswith('openai/'):
+                aspect_ratio, size = _gpt_size(*dims) if dims else ('1:1', '1024x1024')
+                body = {'model': model, 'prompt': prompt, 'n': 1, 'output_format': 'png',
+                        'aspect_ratio': aspect_ratio, 'size': size,
+                        'quality': self.valves.QUALITY,
+                        'provider': {'options': {'openai': {'complexity': self.valves.COMPLEXITY}}}}
+            else:
+                body = {'model': model, 'prompt': prompt, 'n': 1, 'output_format': 'png',
+                        'aspect_ratio': 'auto', 'resolution': self.valves.RESOLUTION}
             if input_ref is not None:
                 body['input_references'] = [{'type': 'image_url', 'image_url': {'url': input_ref}}]
             data = await asyncio.to_thread(_post_image, key, body, self.valves.TIMEOUT_SECONDS)
@@ -284,14 +359,21 @@ class Tools:
         _log_call(op, ok, started, cost, in_bytes, out_bytes)
         return text
 
-    async def edit_image(self, change: str, __user__=None, __request__=None, __event_emitter__=None,
+    async def edit_image(self, change: str = '', kind: str = 'beauty', face: str = '',
+                         __user__=None, __request__=None, __event_emitter__=None,
                          __messages__=None, __files__=None, __metadata__=None) -> str:
         """
-        Sửa hoặc chỉnh ảnh mà người dùng vừa gửi kèm trong chat.
+        Sửa ảnh mà người dùng vừa gửi kèm trong chat.
 
-        Dùng cho MỌI yêu cầu sửa, chỉnh, làm đẹp, đổi nền hay retouch ảnh đã gửi.
-        ``change`` viết bằng tiếng Anh, CHỈ nêu phần cần đổi, ngắn và cụ thể;
-        không bao giờ mô tả khuôn mặt hay ngoại hình của người trong ảnh.
+        Dùng cho MỌI yêu cầu sửa ảnh đã gửi.
+        ``kind``: dùng kind="beauty" khi yêu cầu là làm đẹp chính người trong ảnh
+        (da, mắt, tóc, trông tươi tắn, đỡ mệt, trẻ hơn); kind="other" cho sửa khác
+        (đổi nền, xóa vật, đổi màu áo...). Không chắc -> "beauty".
+        ``face``: CHỈ khi kind="beauty". Tiếng Anh, một đoạn, tả khuôn mặt ĐÚNG như
+        trong ảnh: dáng mặt, gò má, cằm, trán và đường chân tóc, lông mày, mắt và mí,
+        mũi, môi, màu da, đốm nắng/nốt ruồi. Chỉ tả, không khen chê, không đề xuất
+        thay đổi.
+        ``change``: tiếng Anh, CHỈ phần người dùng muốn đổi; với beauty có thể để trống.
         """
         started = time.monotonic()
         key, refused = self._gate('edit', __user__, started)
@@ -302,13 +384,15 @@ class Tools:
             _log_call('edit', 0, started, None, 0, 0)
             return NO_PHOTO
         try:
-            jpeg = _to_jpeg(raw)
+            jpeg, w, h = _to_jpeg(raw)
         except Exception as e:
             _log_call('edit', 0, started, None, len(raw), 0)
             return _error('mạng', _incident(type(e).__name__))
+        k = (kind or '').strip().lower()
+        prompt = build_edit_prompt(change) if k == 'other' else build_beauty_prompt(face, change)
         return await self._run_http(
-            'edit', key, build_edit_prompt(change), _data_url(jpeg), len(jpeg),
-            __user__, __request__, __event_emitter__, __metadata__, started,
+            'edit', key, prompt, _data_url(jpeg), len(jpeg),
+            __user__, __request__, __event_emitter__, __metadata__, started, (w, h),
         )
 
     async def generate_image(self, description: str, __user__=None, __request__=None, __event_emitter__=None,
