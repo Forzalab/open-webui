@@ -1,21 +1,14 @@
 <script lang="ts">
+	import { resolveMachineTarget, type MachineTarget } from '$lib/apis/machines';
 	import Fuse from 'fuse.js';
 	import { getContext, onDestroy, onMount, tick } from 'svelte';
+	import type { Readable } from 'svelte/store';
 
-	import {
-		chatId as activeChatId,
-		folders,
-		models,
-		selectedTerminalId,
-		settings,
-		terminalServers,
-		temporaryChatEnabled,
-		user
-	} from '$lib/stores';
+	import { folders, settings, machines, user } from '$lib/stores';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 	import { getFolders } from '$lib/apis/folders';
 	import { searchKnowledgeBases, searchKnowledgeFiles } from '$lib/apis/knowledge';
-	import { searchFiles, filesystemFile } from '$lib/apis/terminal';
+	import { searchFiles, filesystemFile } from '$lib/apis/machines';
 	import { decodeString, isValidHttpUrl, isYoutubeUrl } from '$lib/utils';
 	import {
 		resolveLocalizedModelDescription,
@@ -30,10 +23,15 @@
 	import GlobeAlt from '$lib/components/icons/GlobeAlt.svelte';
 	import Youtube from '$lib/components/icons/Youtube.svelte';
 	import { toast } from 'svelte-sonner';
+	import { getChatContext } from '$lib/components/chat/context';
+
+	const { chatId: activeChatId, models, temporary } = getChatContext();
 
 	const i18n = getContext<any>('i18n');
 
 	export let query = '';
+	export let selectedMachineId: Readable<string | null>;
+	export let modelId: string | null = null;
 	export let onSelect: (e: any) => void = () => {};
 	export let fileUploadEnabled: boolean = true;
 
@@ -115,69 +113,50 @@
 		searchController?.abort();
 		searchController = new AbortController();
 		const { signal } = searchController;
-		const terminal = getSelectedTerminal();
-		getFilesystemItems(terminal, signal);
+		const machine = getSelectedMachine();
+		getFilesystemItems(machine, signal);
 		getKnowledgeItems(signal);
 		getKnowledgeFileItems(signal);
 	};
 
-	const getFilesystemItems = async (
-		terminal: { url: string; key: string } | null,
-		signal: AbortSignal
-	) => {
-		if (!terminal) {
+	const getFilesystemItems = async (machine: MachineTarget | null, signal: AbortSignal) => {
+		if (!machine) {
 			filesystemItems = [];
 			return;
 		}
 
-		const terminalId = $selectedTerminalId;
+		const machineId = $selectedMachineId;
 		const sessionId = $activeChatId;
 		const res = await searchFiles(
-			terminal.url,
-			terminal.key,
+			machine,
 			query,
 			'.',
 			20,
 			'any',
-			sessionId || undefined,
 			localStorage.getItem('fileNav:showHidden') === 'true',
 			signal
 		).catch(() => null);
 
 		if (signal.aborted) return;
-		if (terminalId !== $selectedTerminalId || sessionId !== $activeChatId) return;
+		if (machineId !== $selectedMachineId || sessionId !== $activeChatId) return;
 		filesystemItems = (res?.results ?? []).map((item: any) => ({
-			...filesystemFile(item, terminalId!, sessionId || null),
+			...filesystemFile(item, machineId!, sessionId || null),
 			filesystem_type: item.type,
 			description: item.path
 		}));
 	};
 
-	const chatContext = (terminal: any) => terminal?.contexts?.chat ?? {};
-
-	const getSelectedTerminal = (): { url: string; key: string } | null => {
-		if (!$selectedTerminalId) return null;
-
-		const systemTerminal = ($terminalServers ?? []).find(
-			(t) => t.id && t.id === $selectedTerminalId
-		);
-		const systemChatContext = chatContext(systemTerminal);
-		if (systemTerminal) {
-			if (
-				systemChatContext === false ||
-				(($temporaryChatEnabled || isTemporaryChatId($activeChatId)) &&
-					systemChatContext?.context_id === 'chat_id')
-			) {
-				return null;
-			}
-
-			return { url: systemTerminal.url, key: localStorage.token };
-		}
-
-		const directTerminal = ($settings?.terminalServers ?? []).find(
-			(t: any) => t.url === $selectedTerminalId && t.enabled
-		);
-		return directTerminal?.url ? { url: directTerminal.url, key: directTerminal.key ?? '' } : null;
+	const getSelectedMachine = (): MachineTarget | null => {
+		const target = resolveMachineTarget($selectedMachineId, $machines ?? [], localStorage.token, {
+			chatId: $activeChatId || null,
+			modelId: modelId
+		});
+		if (
+			($machines ?? []).find((server) => server.id === $selectedMachineId)?.scope === 'chat' &&
+			($temporary || isTemporaryChatId($activeChatId))
+		)
+			return null;
+		return target;
 	};
 
 	$: folderItems = (($folders ?? []) as any[])
@@ -287,7 +266,7 @@
 				{#if item?.type === 'folder'}
 					{$i18n.t('Folders')}
 				{:else if item?.type === 'collection'}
-					{$i18n.t('Collections')}
+					{$i18n.t('Knowledge')}
 				{:else if item?.type === 'file'}
 					{$i18n.t('Files')}
 				{:else if item?.type === 'filesystem'}
@@ -297,7 +276,7 @@
 		{/if}
 
 		<button
-			class="flex h-6 w-full max-w-full items-center justify-between overflow-hidden rounded-xl px-2 text-left text-[0.8125rem] transition-colors duration-75 hover:bg-gray-50/40 dark:hover:bg-gray-800/40 {itemIdx ===
+			class="flex h-6 w-full max-w-full items-center justify-between overflow-hidden rounded-xl px-2 text-left text-[0.8125rem] transition-colors duration-75 hover:bg-base-50/40 dark:hover:bg-base-800/40 {itemIdx ===
 			selectedIdx
 				? 'app-interactive-active selected-command-option-button'
 				: ''}"
@@ -320,7 +299,7 @@
 							: item?.type === 'file'
 								? `${item?.collection?.name} > ${$i18n.t('File')}`
 								: item?.type === 'collection'
-									? $i18n.t('Collection')
+									? $i18n.t('Knowledge Base')
 									: item?.type === 'youtube'
 										? $i18n.t('YouTube')
 										: item?.type === 'web'
@@ -364,7 +343,7 @@
 		{@const itemIdx = knowledgeResults.length + modelIdx}
 		<Tooltip content={model.id} placement="top-start">
 			<button
-				class="flex h-6 w-full items-center rounded-xl px-2 text-left text-[0.8125rem] transition-colors duration-75 hover:bg-gray-50/40 dark:hover:bg-gray-800/40 {itemIdx ===
+				class="flex h-6 w-full items-center rounded-xl px-2 text-left text-[0.8125rem] transition-colors duration-75 hover:bg-base-50/40 dark:hover:bg-base-800/40 {itemIdx ===
 				selectedIdx
 					? 'app-interactive-active selected-command-option-button'
 					: ''}"
@@ -380,7 +359,7 @@
 			>
 				<div class="flex min-w-0 items-center gap-2">
 					<img
-						src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${model.id}&lang=${$i18n.language}`}
+						src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${model.id}&lang=${$i18n.language}&v=${model.info?.updated_at}`}
 						alt={resolveLocalizedModelName(model, $i18n.language) ?? model.id}
 						class="size-4 shrink-0 rounded-full object-cover"
 						on:error={(e) => {

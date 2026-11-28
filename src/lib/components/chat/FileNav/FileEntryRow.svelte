@@ -3,13 +3,15 @@
 </script>
 
 <script lang="ts">
+	import type { MachineTarget } from '$lib/apis/machines';
+	export let target: MachineTarget | null = null;
 	import { toast } from 'svelte-sonner';
 	import { LinkPreview } from 'bits-ui';
 	import { mobile, settings } from '$lib/stores';
 	import { getContext, tick, onDestroy } from 'svelte';
 	import { copyToClipboard, formatFileSize } from '$lib/utils';
-	import { listFiles, type FileEntry } from '$lib/apis/terminal';
-	import type { GitFile } from '$lib/apis/terminal/git';
+	import { listFiles, type FileEntry } from '$lib/apis/machines';
+	import type { GitFile } from '$lib/apis/machines/git';
 
 	import Dropdown from '$lib/components/common/Dropdown.svelte';
 	import DropdownMenu from '$lib/components/common/DropdownMenu.svelte';
@@ -18,7 +20,7 @@
 	import Icon from './Icon.svelte';
 	import FolderOpen from '$lib/components/icons/FolderOpen.svelte';
 
-	export let dragType = 'application/x-terminal-file-move';
+	export let dragType = 'application/x-machine-file-move';
 	export let dragContext = '';
 	export let variant: 'terminal' | 'workspace' = 'terminal';
 	export let viewMode: 'grid' | 'list' = 'list';
@@ -73,10 +75,10 @@
 			)[gitFile.status] ?? {
 				char: '?',
 				label: $i18n.t('Changed'),
-				color: 'text-gray-700 dark:text-gray-300'
+				color: 'text-base-700 dark:text-base-300'
 			})
 		: null;
-	$: nameColor = gitDecoration?.color ?? 'text-gray-800 dark:text-gray-200';
+	$: nameColor = gitDecoration?.color ?? 'text-base-800 dark:text-base-200';
 	$: gitLabel =
 		gitDecoration && gitFile
 			? `${entry.type === 'directory' ? $i18n.t('Contains {{status}}', { status: gitDecoration.label }) : gitDecoration.label} · ${[
@@ -93,9 +95,7 @@
 	export let expanded = false;
 	export let loadingChildren = false;
 	export let folderContentsVersion = 0;
-	export let terminalUrl: string = '';
-	export let terminalKey: string = '';
-	export let terminalSessionId: string | undefined = undefined;
+	export let machineSessionId: string | undefined = undefined;
 
 	export let onOpen: (entry: FileEntry) => void = () => {};
 	export let onDragStart: ((event: DragEvent, path: string) => void) | null = null;
@@ -136,8 +136,8 @@
 	$: canMutate = parentWritable && writable;
 	$: menuItemClass =
 		variant === 'workspace'
-			? 'select-none flex h-[1.6875rem] w-full cursor-pointer items-center gap-2 rounded-xl bg-transparent px-2 text-xs hover:text-gray-900 dark:hover:text-gray-100'
-			: 'select-none flex h-7 w-full items-center gap-2 rounded-lg px-2 text-xs hover:bg-gray-50/40 dark:hover:bg-white/4 transition';
+			? 'select-none flex h-[1.6875rem] w-full cursor-pointer items-center gap-2 rounded-xl bg-transparent px-2 text-xs hover:text-base-900 dark:hover:text-base-100'
+			: 'select-none flex h-7 w-full items-center gap-2 rounded-lg px-2 text-xs hover:bg-base-50/40 dark:hover:bg-base-0/4 transition';
 	$: rowIndent = `${8 + depth * 16}px`;
 	const fitGridName = (node: HTMLElement, name: string) => {
 		const fit = () => {
@@ -191,7 +191,7 @@
 	const closeHoverPreview = () => (openPreview = false);
 	$: hoverDisabled =
 		entry.type !== 'file' ||
-		!terminalUrl ||
+		!target?.baseUrl ||
 		$mobile ||
 		renaming ||
 		menuOpen ||
@@ -219,17 +219,15 @@
 				: $i18n.t('{{count}} items', { count: folderItemCount });
 	const observeFolderContents = (node: Element) => {
 		folderItemCount = null;
-		if (!terminalUrl) return;
+		if (!target?.baseUrl) return;
 		let disposed = false;
-		const url = terminalUrl;
-		const key = terminalKey;
-		const session = terminalSessionId;
+		const capturedTarget = target;
 		const path = directoryPath;
 		const observer = new IntersectionObserver((observations) => {
 			if (!observations.some((observation) => observation.isIntersecting)) return;
 			observer.disconnect();
 			// Only inspect visible folders; failed reads leave their contents unknown.
-			void listFiles(url, key, path, session).then((result) => {
+			void listFiles(capturedTarget!, path).then((result) => {
 				if (!disposed && result)
 					folderItemCount = result.entries.filter(
 						(item) => showHidden || !item.name.startsWith('.')
@@ -470,10 +468,10 @@
 			{selected || active
 			? viewMode === 'grid'
 				? 'bg-blue-50 dark:bg-blue-500/15'
-				: 'bg-gray-100 dark:bg-white/8'
+				: 'bg-base-100 dark:bg-base-0/8'
 			: viewMode === 'grid'
 				? ''
-				: 'hover:bg-gray-100 dark:hover:bg-white/10'}
+				: 'hover:bg-base-100 dark:hover:bg-base-0/10'}
 			{dragOverFolder ? 'bg-blue-50 dark:bg-blue-500/15 ring-2 ring-blue-500/60 ring-inset' : ''}"
 		role="presentation"
 		on:dragover={(e) => {
@@ -528,7 +526,7 @@
 		{:else if viewMode === 'list' && entry.type === 'directory'}
 			<button
 				type="button"
-				class="mr-1.5 flex w-3 shrink-0 items-center self-stretch justify-center text-gray-400 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-400"
+				class="mr-1.5 flex w-3 shrink-0 items-center self-stretch justify-center text-base-400 dark:text-base-600 hover:text-base-600 dark:hover:text-base-400"
 				style="margin-left: {rowIndent};"
 				on:click|stopPropagation={() => onToggleExpand(directoryPath)}
 				aria-label={expanded ? $i18n.t('Collapse') : $i18n.t('Expand')}
@@ -551,8 +549,8 @@
 				aria-checked={selected}
 				aria-label={$i18n.t('Select {{name}}', { name: entry.name })}
 				class="mr-1.5 flex size-3 shrink-0 items-center justify-center rounded-[3px] border transition-colors {selected
-					? 'bg-gray-100 border-gray-400 text-gray-700 dark:bg-gray-700 dark:border-gray-500 dark:text-gray-200'
-					: 'border-gray-300 dark:border-gray-600'} {viewMode === 'grid'
+					? 'bg-base-100 border-base-400 text-base-700 dark:bg-base-700 dark:border-base-500 dark:text-base-200'
+					: 'border-base-300 dark:border-base-600'} {viewMode === 'grid'
 					? 'absolute top-1.5 left-1.5 z-10 !mr-0'
 					: ''}"
 				on:click|stopPropagation={(event) => onSelect(entry, event, entryPath, rowIndex)}
@@ -637,15 +635,8 @@
 						{#if viewMode === 'list'}
 							<FileTypeIcon name={entry.name} type={entry.type} size={14} />
 						{:else}
-							{#key JSON.stringify( [terminalUrl, terminalKey, terminalSessionId, entryPath, entry.modified, entry.size] )}
-								<FileGridIcon
-									{entry}
-									path={entryPath}
-									{terminalUrl}
-									{terminalKey}
-									sessionId={terminalSessionId}
-									itemCount={folderItemCount}
-								/>
+							{#key JSON.stringify( [target?.baseUrl, target?.key, machineSessionId, entryPath, entry.modified, entry.size] )}
+								<FileGridIcon {entry} path={entryPath} {target} itemCount={folderItemCount} />
 							{/key}
 						{/if}
 						{#if renaming}
@@ -654,7 +645,7 @@
 								aria-label={$i18n.t('Rename')}
 								bind:this={renameInput}
 								bind:value={renameValue}
-								class="flex-1 text-xs bg-transparent outline-hidden text-gray-800 dark:text-gray-200 min-w-0 {variant ===
+								class="flex-1 text-xs bg-transparent outline-hidden text-base-800 dark:text-base-200 min-w-0 {variant ===
 								'workspace'
 									? 'h-4 p-0 leading-4'
 									: 'py-0.5'} {viewMode === 'grid'
@@ -691,11 +682,11 @@
 							{@render gitBadge()}
 						{/if}
 						{#if !writable && !renaming && variant !== 'workspace' && viewMode !== 'grid'}
-							<span class="text-[0.625rem] text-gray-400 shrink-0">{$i18n.t('Read-only')}</span>
+							<span class="text-[0.625rem] text-base-400 shrink-0">{$i18n.t('Read-only')}</span>
 						{/if}
 						{#if viewMode === 'grid' && !renaming}
 							<span
-								class="flex w-full min-w-0 shrink-0 items-center justify-center gap-1 text-[11px] leading-3.5 text-gray-500 dark:text-gray-400"
+								class="flex w-full min-w-0 shrink-0 items-center justify-center gap-1 text-[11px] leading-3.5 text-base-500 dark:text-base-400"
 							>
 								{@render gitBadge()}
 								{#if entry.type === 'directory'}
@@ -713,20 +704,20 @@
 							</span>
 						{:else if entry.type === 'file' && entry.size !== undefined && !renaming}
 							{#if showDate && entryDate != null}
-								<span class="text-[0.625rem] text-gray-400 shrink-0"
+								<span class="text-[0.625rem] text-base-400 shrink-0"
 									>{formatRelativeTime(entryDate)}</span
 								>
 							{/if}
-							<span class="text-xs text-gray-400 shrink-0">{formatFileSize(entry.size)}</span>
+							<span class="text-xs text-base-400 shrink-0">{formatFileSize(entry.size)}</span>
 						{:else if entry.type === 'directory' && !renaming}
 							{#if showDate && entryDate != null}
-								<span class="text-[0.625rem] text-gray-400 shrink-0"
+								<span class="text-[0.625rem] text-base-400 shrink-0"
 									>{formatRelativeTime(entryDate)}</span
 								>
 							{/if}
-							{#if terminalUrl}
+							{#if target?.baseUrl}
 								{#key folderContentsVersion}
-									<span use:observeFolderContents class="text-xs text-gray-400 shrink-0"
+									<span use:observeFolderContents class="text-xs text-base-400 shrink-0"
 										>{folderCountLabel}</span
 									>
 								{/key}
@@ -735,16 +726,15 @@
 					</button>
 				{/snippet}
 			</LinkPreview.Trigger>
-			{#if openPreview}
-				{#key JSON.stringify( [terminalUrl, terminalKey, terminalSessionId, entryPath, entry.modified, entry.size] )}
+			{#if openPreview && target}
+				{#key JSON.stringify( [target?.baseUrl, target?.key, machineSessionId, entryPath, entry.modified, entry.size] )}
 					{#await import('./FileHoverPreview.svelte') then { default: FileHoverPreview }}
 						<FileHoverPreview
 							{entry}
 							sideOffset={viewMode === 'grid' ? 4 : 12}
 							path={entryPath}
-							{terminalUrl}
-							{terminalKey}
-							sessionId={terminalSessionId}
+							{target}
+							sessionId={machineSessionId}
 						/>
 					{/await}
 				{/key}
@@ -757,8 +747,8 @@
 				class="shrink-0 flex {($settings?.highContrastMode ?? false)
 					? 'h-6 w-6'
 					: 'h-5 w-5'} items-center justify-center mr-1 rounded transition
-					text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-400
-					hover:bg-gray-50/40 dark:hover:bg-white/4 {viewMode === 'grid'
+					text-base-400 hover:text-base-600 dark:text-base-500 dark:hover:text-base-400
+					hover:bg-base-50/40 dark:hover:bg-base-0/4 {viewMode === 'grid'
 					? 'absolute left-[calc(50%_+_16px)] -top-[3px] !m-0 !h-6 !w-6 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 max-md:opacity-100'
 					: ''}"
 				style:opacity={viewMode === 'grid' && menuOpen ? 1 : undefined}
@@ -800,7 +790,7 @@
 						</button>
 					{/if}
 					{#if entry.type === 'directory' && (onNewFolder || onNewFile)}
-						<div class="my-1 border-t border-gray-100 dark:border-white/10" role="separator"></div>
+						<div class="my-1 border-t border-base-100 dark:border-base-0/10" role="separator"></div>
 					{/if}
 					{#if variant !== 'workspace' || entry.type !== 'directory'}
 						<button

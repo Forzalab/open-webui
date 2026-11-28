@@ -38,11 +38,13 @@
 </script>
 
 <script lang="ts">
+	import type { MachineTarget } from '$lib/apis/machines';
+	export let target: MachineTarget | null = null;
 	import { getAllContexts, mount, unmount, setContext, onDestroy } from 'svelte';
 	import { writable } from 'svelte/store';
 	import DOMPurify from 'dompurify';
 	import { v4 as uuidv4 } from 'uuid';
-	import { downloadFileBlob } from '$lib/apis/terminal';
+	import { downloadFileBlob } from '$lib/apis/machines';
 	import MarkdownTokens from '../Messages/Markdown/MarkdownTokens.svelte';
 	import type { Token, Tokens } from 'marked';
 	import { toast } from 'svelte-sonner';
@@ -52,8 +54,6 @@
 	export let saving = false;
 	export let id: string;
 	export let path = '';
-	export let baseUrl = '';
-	export let apiKey = '';
 	export let chatId: string | null = null;
 	export let resourceVersion = 0;
 	export let onLocalLink: (path: string) => void = () => {};
@@ -70,12 +70,12 @@
 	onDestroy(release);
 	const resolveImage = (reference: string): Promise<string | null> => {
 		const file = resolveDocumentPath(path, reference);
-		if (!file || !baseUrl) return Promise.resolve(null);
+		if (!file || !target?.baseUrl) return Promise.resolve(null);
 		if (!urls.has(file)) {
 			const current = generation;
 			urls.set(
 				file,
-				downloadFileBlob(baseUrl, apiKey, file, chatId ?? undefined).then((result) => {
+				downloadFileBlob(target, file).then((result) => {
 					if (!result || current !== generation) return null;
 					const url = URL.createObjectURL(result.blob);
 					objectUrls.push(url);
@@ -87,15 +87,15 @@
 	};
 	const resources = {
 		resolveImage,
-		localPath: (ref: string) => (baseUrl ? resolveDocumentPath(path, ref) : null),
+		localPath: (ref: string) => (target?.baseUrl ? resolveDocumentPath(path, ref) : null),
 		open: (ref: string) => {
 			const file = resolveDocumentPath(path, ref);
 			if (file) onLocalLink(file);
 		}
 	};
-	setContext('terminal-document', resources);
+	setContext('machine-document', resources);
 	$: {
-		(resourceVersion, path, baseUrl, chatId);
+		(resourceVersion, path, target?.baseUrl, chatId);
 		release();
 	}
 
@@ -217,11 +217,11 @@
 		let alive = true;
 		const update = () => {
 			for (const img of node.querySelectorAll<HTMLImageElement>(
-				'img:not([data-terminal-resolved])'
+				'img:not([data-machine-resolved])'
 			)) {
 				const src = img.getAttribute('src') ?? '';
 				if (!resources.localPath(src)) continue;
-				img.dataset.terminalResolved = 'true';
+				img.dataset.machineResolved = 'true';
 				img.removeAttribute('src');
 				void resolveImage(src).then((url) => {
 					if (alive && url) img.src = url;

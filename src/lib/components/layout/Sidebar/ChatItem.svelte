@@ -12,6 +12,7 @@
 	 * therefore force-closes whichever one is still up.
 	 */
 	let closeActiveHoverPreview: (() => void) | null = null;
+	let chatMenuOpen = false;
 </script>
 
 <script lang="ts">
@@ -21,6 +22,7 @@
 	import relativeTime from 'dayjs/plugin/relativeTime';
 	import type { ChatParticipant } from '$lib/apis/folders';
 	import { goto, invalidate, invalidateAll } from '$app/navigation';
+	import { navigating, page } from '$app/stores';
 	import { onMount, getContext, createEventDispatcher, tick } from 'svelte';
 	import { LinkPreview } from 'bits-ui';
 	import { readable, type Readable } from 'svelte/store';
@@ -37,6 +39,9 @@
 		updateChatFolderIdById
 	} from '$lib/apis/chats';
 	import {
+		activeChatTabId,
+		openEmbeddedChatIds,
+		selectedFolder,
 		chatId,
 		folders,
 		pinnedChats,
@@ -44,11 +49,13 @@
 		mobile,
 		showSidebar,
 		tags,
-		selectedFolder,
 		settings,
 		user
 	} from '$lib/stores';
-	import { refreshChatList, refreshSidebar } from '$lib/stores/chatList';
+	import { refreshSidebar, setChatTitle } from '$lib/stores/chatList';
+	import { updateFolderChatLists } from '$lib/stores/folderStates';
+	import { getCachedChat, pendingChatRequest, requestChat } from '$lib/stores/chatCache';
+	import { closeChatTabs } from '$lib/stores/chatViewStates';
 
 	import ChatMenu from './ChatMenu.svelte';
 	import DeleteConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
@@ -94,6 +101,7 @@
 	export let createdAt: number | null = null;
 	export let updatedAt: number | null = null;
 	export let lastReadAt: number | null = null;
+	export let archived = false;
 	export let active = false;
 	export let pendingApproval = false;
 
@@ -156,7 +164,7 @@
 	// would overwrite the `lastReadAt` prop with a stale server value.
 	let viewedAt: number | null = null;
 
-	$: if (id === $chatId) {
+	$: if (id === $chatId || id === $activeChatTabId) {
 		viewedAt = updatedAt ?? Date.now() / 1000;
 	}
 
@@ -174,18 +182,24 @@
 		menuOpen ||
 		selected ||
 		multiSelected;
+	// The row clicked shows at once; the chat being left does not stay beside it.
+	$: current =
+		!$navigating?.to?.params?.folderId &&
+		($pendingChatRequest && $pendingChatRequest.id === $page.params.id
+			? id === $page.params.id
+			: (id === $chatId && !$selectedFolder) || id === $activeChatTabId);
 	$: chatItemClass = ` w-full flex justify-between rounded-xl px-2 py-1.5 ${
-		id === $chatId || confirmEdit
+		current || confirmEdit
 			? ($settings?.highContrastMode ?? false)
-				? 'bg-black/[0.035] dark:bg-white/[0.06] selected'
-				: 'bg-black/[0.035] dark:bg-white/[0.045] selected'
+				? 'bg-base-1000/[0.035] dark:bg-base-0/[0.06] selected'
+				: 'bg-base-1000/[0.035] dark:bg-base-0/[0.045] selected'
 			: selected || multiSelected
 				? ($settings?.highContrastMode ?? false)
-					? 'bg-black/[0.035] dark:bg-white/[0.055] selected'
-					: 'bg-black/[0.035] dark:bg-white/[0.045] selected'
+					? 'bg-base-1000/[0.035] dark:bg-base-0/[0.055] selected'
+					: 'bg-base-1000/[0.035] dark:bg-base-0/[0.045] selected'
 				: $mobile
 					? ''
-					: ' hover:bg-gray-100 dark:hover:bg-gray-900 group-hover:bg-gray-100 dark:group-hover:bg-gray-900'
+					: ' hover:bg-base-100 dark:hover:bg-base-900 group-hover:bg-base-100 dark:group-hover:bg-base-900'
 	}  whitespace-nowrap text-ellipsis transition`;
 
 	const selectChatHandler = (event?: MouseEvent) => {
@@ -201,10 +215,6 @@
 		}
 		dispatch('select');
 
-		if ($selectedFolder) {
-			selectedFolder.set(null);
-		}
-
 		// Optimistically mark as read in UI when clicked
 		unread = false;
 		lastReadAt = Date.now() / 1000;
@@ -214,6 +224,14 @@
 			void goto(`/c/${id}`);
 			showSidebar.set(false);
 		}
+	};
+
+	// The press comes before the click that opens the chat.
+	const pressChatHandler = (event: PointerEvent) => {
+		if (event.pointerType !== 'mouse' || event.button !== 0 || selecting) return;
+		if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+		if (id === $chatId || $openEmbeddedChatIds.has(id) || getCachedChat(id)) return;
+		void requestChat(id);
 	};
 
 	const renameChatFromDoubleClick = async (e: MouseEvent) => {
@@ -263,12 +281,13 @@
 				return null;
 			});
 			if (!res) return;
+			setChatTitle(id, title);
 
 			if (id === $chatId) {
 				_chatTitle.set(title);
 			}
 
-			await refreshChatList(localStorage.token, { refreshPinned: true });
+			await refreshSidebar(localStorage.token);
 
 			dispatch('change');
 		}
@@ -342,6 +361,8 @@
 		});
 
 		if (res) {
+			updateFolderChatLists({ id }, undefined, true);
+			closeChatTabs(id);
 			if ($chatId === id) {
 				await goto('/');
 
@@ -362,15 +383,17 @@
 		archiving = true;
 
 		try {
+			// The endpoint toggles, so an archived chat (shown under Archived or All) is unarchived.
 			await archiveChatById(localStorage.token, id);
+			updateFolderChatLists({ id }, undefined, true);
 
-			if ($chatId === id) {
+			if (!archived && $chatId === id) {
 				await goto('/');
 				chatId.set('');
 			}
 
 			await refreshAfterChange(null, true);
-			toast.success($i18n.t('Chat archived.'));
+			toast.success(archived ? $i18n.t('Chat unarchived.') : $i18n.t('Chat archived.'));
 		} catch (error) {
 			console.error('Error archiving chat:', error);
 			toast.error($i18n.t('Failed to archive chat.'));
@@ -389,6 +412,7 @@
 			);
 
 			if (res) {
+				updateFolderChatLists(res, folderId);
 				await refreshAfterChange(folderId);
 
 				toast.success($i18n.t('Chat moved successfully'));
@@ -477,6 +501,7 @@
 			if (closeActiveHoverPreview === closeHoverPreview) {
 				closeActiveHoverPreview = null;
 			}
+			if (menuOpen) chatMenuOpen = false;
 		};
 	});
 
@@ -556,13 +581,13 @@
 			} catch {}
 		}
 
-		if (!model && history?.messages && history?.currentId) {
+		if (history?.messages && history?.currentId) {
 			let currentId = history.currentId;
 			while (currentId) {
 				const msg = history.messages[currentId];
 				if (!msg) break;
-				if (msg.role === 'assistant' && msg.model) {
-					model = msg.model;
+				if (msg.role === 'assistant' && msg.model && (!model || msg.model === model)) {
+					model = msg.selectedModelId ?? msg.model;
 					break;
 				}
 				currentId = msg.parentId;
@@ -621,7 +646,7 @@
 		<div
 			dir="auto"
 			class="text-left self-center overflow-hidden w-full h-5 truncate {unread
-				? 'font-normal text-gray-800 dark:text-gray-200'
+				? 'font-normal text-base-800 dark:text-base-200'
 				: ''} {($mobile || showInlineActions) && (!readonly || canRename) && !selecting
 				? 'pr-12'
 				: ''}"
@@ -641,7 +666,7 @@
 	<!-- Time ago indicator -->
 	{#if (updatedAt ?? createdAt) && !showInlineActions && !($mobile && (!readonly || canRename))}
 		<div
-			class="shrink-0 self-center text-[0.625rem] text-gray-400 dark:text-gray-500 pl-2"
+			class="shrink-0 self-center text-[0.625rem] text-base-400 dark:text-base-500 pl-2"
 			aria-hidden="true"
 		>
 			{formatTimeAgo((updatedAt ?? createdAt) as number)}
@@ -658,7 +683,7 @@
 		deleteChatHandler(id);
 	}}
 >
-	<div class=" text-sm text-gray-500 flex-1 line-clamp-3">
+	<div class=" text-sm text-base-500 flex-1 line-clamp-3">
 		{$i18n.t('This will delete')} <span class="  font-normal">{title}</span>.
 	</div>
 </DeleteConfirmDialog>
@@ -666,7 +691,7 @@
 {#if dragged && x && y}
 	<DragGhost {x} {y}>
 		<div
-			class="w-fit max-w-40 rounded-lg bg-white/95 px-2.5 py-1.5 text-xs text-gray-600 shadow-sm ring-1 ring-black/5 dark:bg-gray-850/95 dark:text-gray-300 dark:ring-white/10"
+			class="w-fit max-w-40 rounded-lg bg-base-0/95 px-2.5 py-1.5 text-xs text-base-600 shadow-sm ring-1 ring-base-1000/5 dark:bg-base-850/95 dark:text-base-300 dark:ring-base-0/10"
 		>
 			<div class="flex items-center gap-1.5">
 				<ChatIcon className="size-3.5 shrink-0" strokeWidth="1.5" />
@@ -704,13 +729,13 @@
 			id="sidebar-chat-item"
 			class=" w-full flex justify-between rounded-xl px-2 py-1.5 {id === $chatId || confirmEdit
 				? ($settings?.highContrastMode ?? false)
-					? 'bg-black/[0.035] dark:bg-white/[0.06] selected'
-					: 'bg-black/[0.035] dark:bg-white/[0.045] selected'
+					? 'bg-base-1000/[0.035] dark:bg-base-0/[0.06] selected'
+					: 'bg-base-1000/[0.035] dark:bg-base-0/[0.045] selected'
 				: selected || multiSelected
 					? ($settings?.highContrastMode ?? false)
-						? 'bg-black/[0.035] dark:bg-white/[0.055] selected'
-						: 'bg-black/[0.035] dark:bg-white/[0.045] selected'
-					: 'hover:bg-gray-100 dark:hover:bg-gray-900 group-hover:bg-gray-100 dark:group-hover:bg-gray-900'}  whitespace-nowrap text-ellipsis relative transition {generating
+						? 'bg-base-1000/[0.035] dark:bg-base-0/[0.055] selected'
+						: 'bg-base-1000/[0.035] dark:bg-base-0/[0.045] selected'
+					: 'hover:bg-base-100 dark:hover:bg-base-900 group-hover:bg-base-100 dark:group-hover:bg-base-900'}  whitespace-nowrap text-ellipsis relative transition {generating
 				? 'cursor-not-allowed'
 				: ''}"
 		>
@@ -749,8 +774,8 @@
 					disabled={readonly || $selectionBusy}
 					aria-label={$i18n.t('Select {{name}}', { name: title })}
 					class="mr-2 flex size-3.5 shrink-0 self-center items-center justify-center rounded border disabled:opacity-40 {multiSelected
-						? 'border-gray-900 bg-gray-900 text-white dark:border-gray-200 dark:bg-gray-200 dark:text-gray-900'
-						: 'border-gray-300 dark:border-gray-600'}"
+						? 'border-base-900 bg-base-900 text-base-0 dark:border-base-200 dark:bg-base-200 dark:text-base-900'
+						: 'border-base-300 dark:border-base-600'}"
 					on:click|stopPropagation={(event) => chatSelection?.select(id, event.shiftKey)}
 				>
 					{#if multiSelected}<CheckIcon className="size-2.5" strokeWidth="2" />{/if}
@@ -771,6 +796,7 @@
 				<a
 					class="flex min-w-0 flex-1 items-center"
 					href="/c/{id}"
+					aria-label={chatTitle || title}
 					aria-current={id === $chatId ? 'page' : undefined}
 					on:click={selectChatHandler}
 					draggable="false"
@@ -788,7 +814,9 @@
 						!($settings?.chatHoverPreview ?? true)}
 					bind:open={openPreview}
 					onOpenChange={(open) => {
-						if (open) {
+						if (open && chatMenuOpen) {
+							openPreview = false;
+						} else if (open) {
 							activeProfileId = null;
 							overflowOpen = false;
 						}
@@ -797,7 +825,9 @@
 					<LinkPreview.Trigger
 						class="flex min-w-0 flex-1 -my-1.5 py-1.5 items-center"
 						href="/c/{id}"
+						aria-label={chatTitle || title}
 						aria-current={id === $chatId ? 'page' : undefined}
+						onpointerdown={pressChatHandler}
 						onclick={selectChatHandler}
 						ondblclick={renameChatFromDoubleClick}
 						draggable="false"
@@ -835,7 +865,7 @@
 					<Tooltip content={$i18n.t('Generate')}>
 						<button
 							aria-label={$i18n.t('Generate')}
-							class="flex size-5 items-center justify-center self-center dark:hover:text-white transition disabled:cursor-not-allowed"
+							class="flex size-5 items-center justify-center self-center dark:hover:text-base-0 transition disabled:cursor-not-allowed"
 							id="generate-title-button"
 							disabled={generating}
 							on:click={() => {
@@ -849,10 +879,13 @@
 			{:else if !readonly && shiftKey && mouseOver && !chatSelection}
 				<div class=" flex items-center self-center space-x-1.5">
 					{#if $visibleControls['chat.archive']}
-						<Tooltip content={$i18n.t('Archive')} className="flex items-center">
+						<Tooltip
+							content={archived ? $i18n.t('Unarchive') : $i18n.t('Archive')}
+							className="flex items-center"
+						>
 							<button
-								aria-label={$i18n.t('Archive')}
-								class="flex size-5 items-center justify-center self-center dark:hover:text-white transition disabled:cursor-not-allowed"
+								aria-label={archived ? $i18n.t('Unarchive') : $i18n.t('Archive')}
+								class="flex size-5 items-center justify-center self-center dark:hover:text-base-0 transition disabled:cursor-not-allowed"
 								disabled={archiving}
 								on:click={() => {
 									archiveChatHandler(id);
@@ -868,7 +901,7 @@
 						<Tooltip content={$i18n.t('Delete')}>
 							<button
 								aria-label={$i18n.t('Delete')}
-								class=" self-center dark:hover:text-white transition disabled:cursor-not-allowed"
+								class=" self-center dark:hover:text-base-0 transition disabled:cursor-not-allowed"
 								disabled={deleting}
 								on:click={() => {
 									deleteChatHandler(id);
@@ -884,6 +917,7 @@
 				<div class="flex self-center z-10 items-end">
 					<ChatMenu
 						{readonly}
+						{archived}
 						chatId={id}
 						cloneChatHandler={() => {
 							cloneChatHandler(id);
@@ -902,10 +936,13 @@
 						{markUnreadHandler}
 						onOpen={() => {
 							menuOpen = true;
+							chatMenuOpen = true;
+							closeActiveHoverPreview?.();
 							dispatch('select');
 						}}
 						onClose={() => {
 							menuOpen = false;
+							chatMenuOpen = false;
 							dispatch('unselect');
 						}}
 						onPinChange={(chat) => refreshAfterChange(chat.pinned ? null : chat.folder_id)}
@@ -918,7 +955,7 @@
 							aria-label={$i18n.t('Chat Menu')}
 							class="flex {($settings?.highContrastMode ?? false)
 								? 'size-6'
-								: 'size-5'} items-center justify-center self-center dark:hover:text-white transition m-0"
+								: 'size-5'} items-center justify-center self-center dark:hover:text-base-0 transition m-0"
 						>
 							<MoreHorizontalIcon className="size-3.5" strokeWidth="2" />
 						</button>

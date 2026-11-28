@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
-	import DOMPurify from 'dompurify';
 	import { isCodeFile } from '$lib/utils/codeHighlight';
 	import {
 		FileContentError,
@@ -39,9 +38,7 @@
 	let controller: AbortController;
 	let indexedController: AbortController;
 	let objectUrl = '';
-	let workbook: any = null;
 	let selectedExcelSheet = '';
-	let excelSheetNames: string[] = [];
 	let indexedEditor: FileCodeEditor;
 	let mounted = false;
 	$: name = fileName(file);
@@ -89,14 +86,6 @@
 			if (!signal.aborted) indexedLoading = false;
 		}
 	};
-	const selectSheet = async (sheet: string) => {
-		const key = request;
-		const { excelToTable } = await import('$lib/utils/excelToTable');
-		const result = await excelToTable(workbook.Sheets[sheet]);
-		if (key !== request) return;
-		selectedExcelSheet = sheet;
-		previewData = { fileOfficeHtml: DOMPurify.sanitize(result.html, { ADD_ATTR: ['target'] }) };
-	};
 	const loadOriginal = async () => {
 		controller?.abort();
 		controller = new AbortController();
@@ -137,11 +126,10 @@
 				const { readExcelWorkbook } = await import('$lib/utils/excelToTable');
 				const bytes = await blob.arrayBuffer();
 				if (signal.aborted || key !== request) return;
-				workbook = await readExcelWorkbook(bytes);
-				excelSheetNames = workbook.SheetNames;
-				if (!excelSheetNames.length) throw new Error('This workbook has no sheets.');
-				await selectSheet(excelSheetNames[0]);
-				data = previewData;
+				const workbook = await readExcelWorkbook(bytes);
+				if (!workbook.SheetNames.length) throw new Error('This workbook has no sheets.');
+				selectedExcelSheet = workbook.SheetNames[0];
+				data = { excelWorkbook: workbook };
 			} else if (ext === 'pptx' || mime.includes('presentationml')) {
 				const { pptxToImages } = await import('$lib/utils/pptxToHtml');
 				const result = await pptxToImages(await blob.arrayBuffer());
@@ -220,24 +208,24 @@
 	});
 </script>
 
-<div class="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-white dark:bg-gray-900">
-	<div class="flex h-8 shrink-0 items-center gap-1 px-2.5 text-xs dark:bg-black">
+<div class="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-base-0 dark:bg-base-900">
+	<div class="flex h-8 shrink-0 items-center gap-1 px-2.5 text-xs">
 		{#if mobile}<button
 				type="button"
 				aria-label={$i18n.t('Back to files')}
-				class="flex shrink-0 items-center gap-1 whitespace-nowrap pr-1 text-gray-500"
+				class="flex shrink-0 items-center gap-1 whitespace-nowrap pr-1 text-base-500"
 				on:click={onClose}><ChevronLeft className="size-3.5" />{$i18n.t('Back')}</button
 			>{/if}
-		<span class="min-w-0 flex-1 truncate text-gray-500" title={name}>{name}</span>
+		<span class="min-w-0 flex-1 truncate text-base-500" title={name}>{name}</span>
 		{#if !noOriginal && (originalLoaded || previewError)}<button
 				type="button"
-				class="shrink-0 px-1 py-0.5 {state.mode === 'preview' ? '' : 'text-gray-400'}"
+				class="shrink-0 px-1 py-0.5 {state.mode === 'preview' ? '' : 'text-base-400'}"
 				aria-pressed={state.mode === 'preview'}
 				on:click={() => (state.mode = 'preview')}>{$i18n.t('Preview')}</button
 			>{/if}
 		<button
 			type="button"
-			class="shrink-0 px-1 py-0.5 {state.mode === 'indexed' ? '' : 'text-gray-400'}"
+			class="shrink-0 px-1 py-0.5 {state.mode === 'indexed' ? '' : 'text-base-400'}"
 			aria-pressed={state.mode === 'indexed'}
 			on:click={() => (state.mode = 'indexed')}>{$i18n.t('Indexed text')}</button
 		>
@@ -245,14 +233,14 @@
 			{#if state.editing}
 				<button
 					type="button"
-					class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-normal text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60 dark:text-gray-400 dark:hover:bg-gray-850 dark:hover:text-white"
+					class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-normal text-base-600 transition hover:bg-base-100 hover:text-base-900 disabled:opacity-60 dark:text-base-400 dark:hover:bg-base-850 dark:hover:text-base-0"
 					disabled={saving}
 					on:click={() => (state = { ...state, draft: state.indexed ?? '', editing: false })}
 					>{$i18n.t('Cancel')}</button
 				>
 				<button
 					type="button"
-					class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
+					class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-base-900 px-2.5 text-xs font-normal text-base-0 transition hover:bg-base-1000 disabled:opacity-60 dark:bg-base-100 dark:text-base-900 dark:hover:bg-base-0"
 					disabled={saving || state.indexed === null}
 					on:click={save}
 				>
@@ -261,7 +249,7 @@
 			{:else}
 				<button
 					type="button"
-					class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-normal text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60 dark:text-gray-400 dark:hover:bg-gray-850 dark:hover:text-white"
+					class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-normal text-base-600 transition hover:bg-base-100 hover:text-base-900 disabled:opacity-60 dark:text-base-400 dark:hover:bg-base-850 dark:hover:text-base-0"
 					on:click={() => {
 						state = { ...state, mode: 'indexed', editing: true, draft: state.indexed ?? '' };
 					}}>{$i18n.t('Edit')}</button
@@ -269,7 +257,7 @@
 			{/if}
 		{/if}
 		<Dropdown closeOnSelect align="end"
-			><button type="button" aria-label={$i18n.t('File actions')} class="shrink-0 p-1 text-gray-500"
+			><button type="button" aria-label={$i18n.t('File actions')} class="shrink-0 p-1 text-base-500"
 				><EllipsisHorizontal className="size-3.5" /></button
 			>
 			<div slot="content">
@@ -289,7 +277,7 @@
 		>
 	</div>
 	{#if state.mode === 'preview'}
-		{#if previewError}<div class="p-4 text-xs text-gray-500">
+		{#if previewError}<div class="p-4 text-xs text-base-500">
 				<p role="alert">{previewError}</p>
 				<button class="mt-2" type="button" on:click={loadOriginal}>{$i18n.t('Retry')}</button>
 			</div>
@@ -300,9 +288,7 @@
 				readOnly
 				allowScripts={false}
 				bind:showRaw
-				{excelSheetNames}
-				{selectedExcelSheet}
-				onSheetChange={selectSheet}
+				bind:selectedExcelSheet
 			/>{/if}
 	{:else if indexedLoading}<div class="p-4"><Spinner className="size-4" /></div>
 	{:else if indexedError}<div class="p-4 text-xs">
@@ -321,7 +307,7 @@
 				onSave={save}
 			/>
 		</div>
-		{#if !state.indexed && !state.editing}<p class="px-3 py-2 text-xs text-gray-500">
+		{#if !state.indexed && !state.editing}<p class="px-3 py-2 text-xs text-base-500">
 				{$i18n.t('No content found')}
 			</p>{/if}
 	{/if}

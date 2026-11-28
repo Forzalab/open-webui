@@ -5,23 +5,33 @@ import contextlib
 import json
 from uuid import uuid4
 
+from . import reasoning_effort
+
 
 async def run(transport, output, prompt, images, options):
     async def send(message):
         await transport.write(json.dumps(message) + '\n')
 
-    initialize_id = uuid4().hex
-    await send({'type': 'control_request', 'request_id': initialize_id, 'request': {'subtype': 'initialize'}})
     messages = transport.read_messages()
-    async with asyncio.timeout(60):
-        async for message in messages:
-            if (
-                message.get('type') == 'control_response'
-                and message.get('response', {}).get('request_id') == initialize_id
-            ):
-                if message['response'].get('subtype') == 'error':
-                    raise ValueError(message['response'].get('error', 'Claude initialization failed'))
-                break
+
+    async def request(control):
+        request_id = uuid4().hex
+        await send({'type': 'control_request', 'request_id': request_id, 'request': control})
+        async with asyncio.timeout(60):
+            async for message in messages:
+                if (
+                    message.get('type') == 'control_response'
+                    and message.get('response', {}).get('request_id') == request_id
+                ):
+                    if message['response'].get('subtype') == 'error':
+                        raise ValueError(message['response'].get('error', 'Claude request failed'))
+                    return
+        raise ValueError('Claude ended before replying')
+
+    await request({'subtype': 'initialize'})
+    effort = reasoning_effort(options)
+    if effort is not None:
+        await request({'subtype': 'apply_flag_settings', 'settings': {'effortLevel': effort}})
     content = [{'type': 'text', 'text': prompt}]
     for image in images:
         prefix, data = image.split(',', 1)
@@ -34,15 +44,35 @@ async def run(transport, output, prompt, images, options):
             'message': {'role': 'user', 'content': content},
             'parent_tool_use_id': None,
             'session_id': options.get('resume') or 'default',
+            # Claude reports which messages it read and answered only when they carry an id.
+            'uuid': str(uuid4()),
         }
     )
     streamed_text = streamed_thinking = False
+    steered = set()
+
+    async def steer(text):
+        message_id = str(uuid4())
+        steered.add(message_id)
+        await send(
+            {
+                'type': 'user',
+                'message': {'role': 'user', 'content': [{'type': 'text', 'text': text}]},
+                'parent_tool_use_id': None,
+                'session_id': output.state['session_id'],
+                'uuid': message_id,
+            }
+        )
+
     try:
         async for message in messages:
             kind = message.get('type')
+            if output.state.get('session_id') and 'user_message_uuids' in message:
+                # Older versions don't say which messages a result answers.
+                output.steer = steer
             if kind == 'system' and message.get('subtype') == 'init':
                 output.state['session_id'] = message['session_id']
-                await output.flush(force=True)
+                await output.flush(force=True, persist=True)
             elif kind == 'control_request':
                 request = message['request']
                 if request.get('subtype') != 'can_use_tool':
@@ -97,13 +127,16 @@ async def run(transport, output, prompt, images, options):
                         streamed_thinking = True
                         await output.text(delta.get('thinking', ''), reasoning=True)
             elif kind == 'assistant':
+                if message.get('uuid') and not message.get('parent_tool_use_id'):
+                    # Later regenerations and edits resume the conversation at this turn's last reply.
+                    output.state['turn'] = message['uuid']
                 for block in message.get('message', {}).get('content', []):
                     if block['type'] == 'text' and not streamed_text:
                         await output.text(block['text'])
                     elif block['type'] == 'thinking' and not streamed_thinking:
                         await output.text(block['thinking'], reasoning=True)
                     elif block['type'] == 'tool_use':
-                        await output.tool(block['id'], block['name'], block['input'], native=block)
+                        await output.tool(block['id'], block['name'], block['input'], provider_data=block)
             elif kind == 'user':
                 blocks = message.get('message', {}).get('content', [])
                 for block in blocks if isinstance(blocks, list) else []:
@@ -113,18 +146,34 @@ async def run(transport, output, prompt, images, options):
                             block['tool_use_id'],
                             previous.get('name', 'agent_tool'),
                             json.loads(previous.get('arguments', '{}')),
-                            native=block,
+                            # The whole event: its tool_use_result has the edit's structuredPatch.
+                            provider_data=message,
                             result=block.get('content'),
                             done=True,
                         )
             elif kind == 'result':
+                if (message.get('origin') or {}).get('kind') == 'task-notification' and not message.get(
+                    'user_message_uuids'
+                ):
+                    # About a background command, and answers no message of the user's.
+                    continue
                 output.state['session_id'] = message['session_id']
                 output.usage = message.get('usage')
                 if message.get('is_error'):
                     raise ValueError(
                         message.get('result') or '; '.join(message.get('errors') or []) or 'Claude Code turn failed'
                     )
-                return
+                steered.difference_update(message.get('user_message_uuids') or [])
+                if not steered:
+                    return
+                # Claude finished before reading a message, and answers it next.
+                await output.text('\n\n')
+            elif (
+                kind == 'command_lifecycle'
+                and message.get('command_uuid') in steered
+                and message.get('state') in {'cancelled', 'discarded', 'refused'}
+            ):
+                raise ValueError('Claude Code did not read your message. Send it again.')
         raise ValueError('Claude Code ended without a turn result')
     except asyncio.CancelledError:
         with contextlib.suppress(Exception):

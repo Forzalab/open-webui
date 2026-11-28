@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { getContext, tick } from 'svelte';
+	import type { WorkBook } from 'xlsx';
 	import Icon from '$lib/components/chat/FileNav/Icon.svelte';
 	import {
 		excelToTable,
+		SheetTooLargeError,
 		parseSpreadsheetPaste,
 		type ExcelWorkbookEditor,
 		type CellEdit,
@@ -14,9 +16,9 @@
 	} from '$lib/utils/excelToTable';
 	import { copyToClipboard } from '$lib/utils';
 
-	export let html: string;
-	export let sheetNames: string[] = [];
+	export let workbook: WorkBook;
 	export let selectedSheet = '';
+	export let rowCount = 0;
 	export let onSheetChange: ((sheet: string) => void) | null = null;
 	export let editor: ExcelWorkbookEditor | null = null;
 	export let onDirtyChange: (dirty: boolean) => void = () => {};
@@ -30,7 +32,10 @@
 	let editStart = '';
 	let renderedSheet = '';
 	let restoreAddress = '';
-	let renderVersion = 0;
+	let html = '';
+	let refreshedHtml: string | null = null;
+	let oversizedRange: string | null = null;
+	let pendingDraft: { address: string; text: string } | null = null;
 	const i18n: any = getContext('i18n');
 	const t = (value: string) => $i18n.t(value);
 	type Cell = GridCell & { element: HTMLTableCellElement };
@@ -103,10 +108,15 @@
 	$: (editor, saving, notifyChange());
 	export const captureEdit = () =>
 		input && editingCell ? { address: editingCell.address, text: input.value } : null;
-	export async function restoreEdit(draft: { address: string; text: string } | null) {
-		await tick();
-		if (!draft) return;
-		const cell = cells.find((cell) => cell.address === draft.address);
+	export function restoreEdit(draft: { address: string; text: string } | null) {
+		pendingDraft = draft;
+		// Otherwise the pending grid refresh applies it once the new cells exist.
+		if (refreshedHtml === html) applyPendingDraft();
+	}
+	function applyPendingDraft() {
+		const draft = pendingDraft;
+		pendingDraft = null;
+		const cell = draft && cells.find((cell) => cell.address === draft.address);
 		if (cell) startEdit(cell, draft.text);
 	}
 	function notifyChange() {
@@ -115,27 +125,36 @@
 		canRedo = !!editor?.canRedo;
 		onDirtyChange(changed);
 	}
-	async function renderEdits() {
-		if (!editor) return;
-		const version = ++renderVersion;
-		const sheet = selectedSheet;
-		let result;
+	$: renderSheet(editor?.workbook ?? workbook, selectedSheet);
+	function renderSheet(book: WorkBook, sheet: string) {
+		const worksheet = book.Sheets[sheet];
 		try {
-			result = await excelToTable(editor.workbook.Sheets[sheet]);
+			const result = worksheet ? excelToTable(worksheet) : { html: '', rowCount: 0 };
+			html = result.html;
+			rowCount = result.rowCount;
+			oversizedRange = null;
 		} catch (error) {
-			status = String(error);
-			return;
+			html = '';
+			rowCount = error instanceof SheetTooLargeError ? error.rowCount : 0;
+			oversizedRange = error instanceof SheetTooLargeError ? error.usedRange : null;
+			if (oversizedRange === null) status = String(error).replace(/^Error: /, '');
 		}
-		if (version !== renderVersion || sheet !== selectedSheet) return;
+	}
+	function renderEdits() {
+		if (!editor) return;
 		restoreAddress = focus?.address ?? '';
-		html = result.html;
+		renderSheet(editor.workbook, selectedSheet);
+	}
+	function changeSheet(sheet: string) {
+		selectedSheet = sheet;
+		onSheetChange?.(sheet);
 	}
 	function applyEdits(edits: CellEdit[]) {
 		if (!editor || saving) return false;
 		try {
 			editor.apply(selectedSheet, edits);
 			notifyChange();
-			void renderEdits();
+			renderEdits();
 			return true;
 		} catch (error) {
 			status = String(error).replace(/^Error: /, '');
@@ -225,7 +244,7 @@
 		if (redo) editor.redo();
 		else editor.undo();
 		notifyChange();
-		void renderEdits();
+		renderEdits();
 	}
 	async function saveWorkbook() {
 		if (!flushEdit() || !onSave || saving) return;
@@ -520,9 +539,9 @@
 		}
 		const sheet = (match[1]?.replace(/''/g, "'") ?? match[2]) || selectedSheet;
 		const target = `${match[3].toUpperCase()}${match[4]}`;
-		if (sheet !== selectedSheet && sheetNames.includes(sheet)) {
+		if (sheet !== selectedSheet && workbook.SheetNames.includes(sheet)) {
 			pendingLink = target;
-			onSheetChange?.(sheet);
+			changeSheet(sheet);
 		} else {
 			const cell = cells.find((c) => c.address === target);
 			if (cell) select(cell);
@@ -674,7 +693,9 @@
 			pendingLink = '';
 			restoreAddress = '';
 			renderedSheet = selectedSheet;
+			refreshedHtml = html;
 			notifyChange();
+			applyPendingDraft();
 		}
 		node.addEventListener('scroll', scroll, { passive: true });
 		node.addEventListener('pointerdown', pointerDown);
@@ -709,13 +730,13 @@
 	}
 </script>
 
-<div use:shortcuts class="excel-viewer text-gray-600 dark:text-gray-300">
-	<div class="excel-formula-bar border-b border-gray-100/40 dark:border-gray-800/25">
+<div use:shortcuts class="excel-viewer text-base-600 dark:text-base-300">
+	<div class="excel-formula-bar border-b border-base-100/40 dark:border-base-800/25">
 		<output
-			class="text-gray-500 dark:text-gray-400 border-r border-gray-100/40 dark:border-gray-800/25"
+			class="text-base-500 dark:text-base-400 border-r border-base-100/40 dark:border-base-800/25"
 			aria-label={t('Selected range')}>{address || '—'}</output
 		>
-		<span class="text-gray-400 dark:text-gray-500" aria-hidden="true">ƒx</span>
+		<span class="text-base-400 dark:text-base-500" aria-hidden="true">ƒx</span>
 		<input
 			aria-label={t('Formula or value')}
 			readonly
@@ -725,11 +746,11 @@
 	</div>
 	{#if searchOpen}
 		<div
-			class="excel-find flex items-center gap-1 rounded-lg border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-850 shadow-sm"
+			class="excel-find flex items-center gap-1 rounded-lg border border-base-100 dark:border-base-800 bg-base-0 dark:bg-base-850 shadow-sm"
 			role="search"
 			aria-label={t('Find in sheet')}
 		>
-			<span class="text-gray-400 dark:text-gray-500 px-1"><Icon name="search" size={13} /></span>
+			<span class="text-base-400 dark:text-base-500 px-1"><Icon name="search" size={13} /></span>
 			<input
 				bind:this={searchInput}
 				bind:value={query}
@@ -743,7 +764,7 @@
 					if (event.key === 'Escape') closeSearch();
 				}}
 			/>
-			{#if query}<span class="excel-match-count text-gray-400 dark:text-gray-500" aria-live="polite"
+			{#if query}<span class="excel-match-count text-base-400 dark:text-base-500" aria-live="polite"
 					>{matches.length ? `${matchIndex + 1} / ${matches.length}` : t('No matches')}</span
 				>{/if}
 			<button
@@ -771,30 +792,48 @@
 			>
 		</div>
 	{/if}
-	<div bind:this={viewport} use:grid={html} class="excel-viewport">{@html html}</div>
-	<div class="excel-footer border-t border-gray-100/40 dark:border-gray-800/25">
+	{#if oversizedRange !== null}
+		<p
+			class="flex flex-1 items-center justify-center p-4 text-center text-sm text-base-500 dark:text-base-400"
+		>
+			<!-- {$i18n.t('This sheet is too large to preview. Download it to view all cells.')} -->
+			{t('This sheet is too large to preview. Download it to view all cells.')}
+		</p>
+	{/if}
+	<div
+		bind:this={viewport}
+		use:grid={html}
+		class="excel-viewport"
+		style:display={oversizedRange === null ? null : 'none'}
+	>
+		{@html html}
+	</div>
+	<div class="excel-footer border-t border-base-100/40 dark:border-base-800/25">
 		<div class="excel-tabs scrollbar-none" role="tablist" aria-label={t('Worksheets')}>
-			{#each sheetNames as name}<button
+			{#each workbook.SheetNames as name}<button
 					type="button"
 					role="tab"
 					aria-selected={selectedSheet === name}
 					class="shrink-0 px-2 py-1 text-xs rounded-md transition-colors {selectedSheet === name
-						? 'bg-gray-100/40 dark:bg-gray-800/25 text-gray-700 dark:text-gray-200 font-normal'
-						: 'text-gray-500 dark:text-gray-400 hover:bg-gray-100/30 dark:hover:bg-gray-800/20 hover:text-gray-600 dark:hover:text-gray-300'}"
+						? 'bg-base-100/40 dark:bg-base-800/25 text-base-700 dark:text-base-200 font-normal'
+						: 'text-base-500 dark:text-base-400 hover:bg-base-100/30 dark:hover:bg-base-800/20 hover:text-base-600 dark:hover:text-base-300'}"
 					disabled={saving}
 					on:click={() => {
-						if (flushEdit()) onSheetChange?.(name);
+						if (flushEdit()) changeSheet(name);
 					}}>{name}</button
 				>{/each}
 		</div>
 		<span
-			class="excel-status text-gray-400 dark:text-gray-500"
+			class="excel-status text-base-400 dark:text-base-500"
 			role="status"
 			title={status}
 			aria-live="polite"
-			>{status || (usedRange ? `${t('Used range')}: ${usedRange}` : t('Empty sheet'))}</span
+			>{status ||
+				((oversizedRange ?? usedRange)
+					? `${t('Used range')}: ${oversizedRange ?? usedRange}`
+					: t('Empty sheet'))}</span
 		>
-		<div class="flex shrink-0 items-center gap-0.5 text-gray-500 dark:text-gray-400">
+		<div class="flex shrink-0 items-center gap-0.5 text-base-500 dark:text-base-400">
 			{#if editor}
 				<button
 					type="button"
@@ -828,6 +867,7 @@
 				disabled={!focus}
 				on:click={copySelection}><Icon name="copy" size={13} /></button
 			>
+			<slot name="toolbar" />
 		</div>
 	</div>
 </div>
@@ -856,12 +896,12 @@
 			background-color 100ms;
 	}
 	.excel-control:hover:not(:disabled) {
-		color: var(--color-gray-800);
-		background: color-mix(in srgb, var(--color-gray-100) 40%, transparent);
+		color: var(--color-base-800);
+		background: color-mix(in srgb, var(--color-base-100) 40%, transparent);
 	}
 	:global(.dark) .excel-control:hover:not(:disabled) {
-		color: var(--color-gray-200);
-		background: color-mix(in srgb, var(--color-gray-800) 25%, transparent);
+		color: var(--color-base-200);
+		background: color-mix(in srgb, var(--color-base-800) 25%, transparent);
 	}
 	button:disabled {
 		opacity: 0.3;
@@ -872,11 +912,11 @@
 	}
 	.excel-formula-bar:focus-within,
 	.excel-find:focus-within {
-		border-color: var(--color-gray-600);
+		border-color: var(--color-base-600);
 	}
 	:global(.dark) .excel-formula-bar:focus-within,
 	:global(.dark) .excel-find:focus-within {
-		border-color: var(--color-gray-400);
+		border-color: var(--color-base-400);
 	}
 	.excel-formula-bar {
 		display: flex;
@@ -907,10 +947,10 @@
 		font-size: 0.6875rem;
 	}
 	.excel-formula-bar input::placeholder {
-		color: var(--color-gray-400);
+		color: var(--color-base-400);
 	}
 	:global(.dark) .excel-formula-bar input::placeholder {
-		color: var(--color-gray-500);
+		color: var(--color-base-500);
 	}
 	.excel-find {
 		position: absolute;
@@ -940,7 +980,7 @@
 		overflow: auto;
 		position: relative;
 		background: #fff;
-		color: var(--color-gray-800, #202124);
+		color: var(--color-base-800, #202124);
 	}
 	.excel-viewport :global(table) {
 		table-layout: fixed;
@@ -952,8 +992,8 @@
 	}
 	.excel-viewport :global(td),
 	.excel-viewport :global(th) {
-		border-right: 1px solid var(--color-gray-200, #e5e7eb);
-		border-bottom: 1px solid var(--color-gray-200, #e5e7eb);
+		border-right: 1px solid var(--color-base-200, #e5e7eb);
+		border-bottom: 1px solid var(--color-base-200, #e5e7eb);
 		padding: 4px 8px;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -967,17 +1007,17 @@
 		user-select: none;
 	}
 	.excel-viewport :global(th) {
-		background: var(--color-gray-50, #f9fafb);
-		color: var(--color-gray-400, #9ca3af);
+		background: var(--color-base-50, #f9fafb);
+		color: var(--color-base-400, #9ca3af);
 		font-family: inherit;
 		font-size: 0.625rem;
 		font-weight: 400;
 		user-select: none;
 	}
 	:global(.dark) .excel-viewport :global(th) {
-		background: var(--color-gray-850);
-		color: var(--color-gray-500);
-		border-color: var(--color-gray-800);
+		background: var(--color-base-850);
+		color: var(--color-base-500);
+		border-color: var(--color-base-800);
 	}
 	.excel-viewport :global(thead th) {
 		position: sticky;
@@ -1030,11 +1070,11 @@
 	.excel-viewport :global(.excel-resize:hover),
 	.excel-viewport :global(.excel-resize:focus-visible) {
 		outline: none;
-		background: linear-gradient(to left, var(--color-gray-600) 1px, transparent 1px);
+		background: linear-gradient(to left, var(--color-base-600) 1px, transparent 1px);
 	}
 	:global(.dark) .excel-viewport :global(.excel-resize:hover),
 	:global(.dark) .excel-viewport :global(.excel-resize:focus-visible) {
-		background: linear-gradient(to left, var(--color-gray-400) 1px, transparent 1px);
+		background: linear-gradient(to left, var(--color-base-400) 1px, transparent 1px);
 	}
 	.excel-viewport :global(.excel-cell-input) {
 		position: absolute;
@@ -1045,7 +1085,7 @@
 		padding: 4px 7px;
 		margin: 0;
 		resize: none;
-		border: 1px solid var(--color-gray-600, #4b5563);
+		border: 1px solid var(--color-base-600, #4b5563);
 		outline: none;
 		box-shadow: none;
 		border-radius: 0;

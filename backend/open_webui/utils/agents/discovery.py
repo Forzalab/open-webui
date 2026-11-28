@@ -1,8 +1,9 @@
 """Models exposed by the selected Open Terminal environment."""
 
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 
-from open_webui.utils.terminals import get_terminal_json
+from open_webui.utils.agents.session import model_id
+from open_webui.utils.machines import MissingMachineContext, get_machine_json
 
 
 def model_controls(model):
@@ -13,7 +14,7 @@ def model_controls(model):
             'Reasoning effort',
             'supportedReasoningEfforts',
             'reasoningEffort',
-            'reasoningEffort',
+            'label',
             'defaultReasoningEffort',
         ),
         ('service_tier', 'Service tier', 'serviceTiers', 'id', 'name', 'defaultServiceTier'),
@@ -33,26 +34,29 @@ def model_controls(model):
 
 
 async def get_models(request, user, metadata, *, provider=None, cwd=None):
-    terminal_id = metadata.get('terminal_id')
-    if not terminal_id:
+    machine_id = metadata.get('machine_id')
+    if not machine_id:
         return []
-    if not cwd:
-        directory = await get_terminal_json(request, user, metadata, '/files/cwd')
-        cwd = (directory or {}).get('cwd')
-    params = {'provider': provider} if provider else {}
-    if cwd:
-        params['cwd'] = cwd
-    path = '/agents' + ('?' + urlencode(params) if params else '')
-    catalog = await get_terminal_json(request, user, metadata, path)
+    try:
+        if not cwd:
+            directory = await get_machine_json(request, user, metadata, '/files/cwd')
+            cwd = (directory or {}).get('cwd')
+        params = {'provider': provider} if provider else {}
+        if cwd:
+            params['cwd'] = cwd
+        path = '/agents' + ('?' + urlencode(params) if params else '')
+        catalog = await get_machine_json(request, user, metadata, path)
+    except MissingMachineContext:
+        return []
     if not catalog or catalog.get('protocol_version') != 1:
         return []
     models = [
         {
-            'id': f'agent:{quote(terminal_id, safe="")}:{agent["id"]}:{quote(model["id"], safe="")}',
+            'id': model_id({'machine_id': machine_id, 'provider': agent['id'], 'model': model['id']}),
             'name': f'{agent["id"]}/{model["id"]}',
-            'owned_by': 'terminal',
+            'owned_by': 'machine',
             'object': 'model',
-            'agent': {'terminal_id': terminal_id, 'provider': agent['id'], 'model': model['id']},
+            'agent': {'machine_id': machine_id, 'provider': agent['id'], 'model': model['id']},
             'info': {
                 'params': {'model_controls': model_controls(model)},
                 'meta': {
@@ -61,6 +65,7 @@ async def get_models(request, user, metadata, *, provider=None, cwd=None):
                         'file_upload': True,
                         'web_search': False,
                         'image_generation': False,
+                        'video_generation': False,
                         'code_interpreter': False,
                         'builtin_tools': False,
                     }

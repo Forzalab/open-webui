@@ -6,15 +6,15 @@
 	import ChevronRightIcon from '$lib/components/layout/Sidebar/icons/ChevronRight.svelte';
 	import { toast } from 'svelte-sonner';
 	import { tick, getContext, onMount } from 'svelte';
-	import type { Writable } from 'svelte/store';
 
-	import { models, settings } from '$lib/stores';
+	import { settings } from '$lib/stores';
 	import { user as _user } from '$lib/stores';
 	import {
 		copyToClipboard as _copyToClipboard,
 		formatMessageTimestamp,
 		formatMessageTimestampFull,
-		isRasterImageContentType
+		isRasterImageContentType,
+		isInternalMessage
 	} from '$lib/utils';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 	import equal from 'fast-deep-equal';
@@ -29,16 +29,18 @@
 	import Image from '$lib/components/common/Image.svelte';
 	import DeleteConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 	import SubagentResultRow from './SubagentResultRow.svelte';
+	import ChatMessageRow from './ChatMessageRow.svelte';
+	import TimerRow from './TimerRow.svelte';
+	import { getChatContext } from '$lib/components/chat/context';
+
+	const { models } = getChatContext();
 
 	const i18n = getContext<typeof import('$lib/i18n').default>('i18n');
-	const contextCompactions =
-		getContext<Writable<Record<string, 'in_progress' | { error: string }>>>('contextCompactions');
 	export let user;
 
 	export let chatId;
 	export let history;
 	export let messageId;
-	export let selectedModels: string[] = [];
 
 	export let siblings;
 
@@ -51,11 +53,13 @@
 
 	export let isFirstMessage: boolean;
 	export let readOnly: boolean;
-	export let shareMode: 'continue' | null = null;
+	export let writeAccess = false;
 	export let allowDelete = true;
 	export let compactPreview = false;
 	export let editCodeBlock = true;
 	export let topPadding = false;
+
+	$: chatBubble = compactPreview || ($settings?.chatBubble ?? true);
 
 	let showDeleteConfirm = false;
 
@@ -70,9 +74,6 @@
 	let editScrollContainer: HTMLDivElement;
 
 	let message = structuredClone(history.messages[messageId]);
-	$: canBranch = ![...selectedModels, ...(message.models ?? [])].some((id) =>
-		id.startsWith('agent:')
-	);
 	$: authorId = message.user_id || message.user?.id || user?.id;
 	$: author =
 		message.user?.id === authorId
@@ -84,7 +85,6 @@
 					: null;
 	$: isOwn = Boolean($_user?.id && authorId === $_user.id);
 	$: authorName = author?.name || $i18n.t('Unknown User');
-	let timerExpanded = false;
 	$: if (history.messages) {
 		const source = history.messages[messageId];
 		if (source) {
@@ -122,7 +122,6 @@
 	};
 
 	const editMessageConfirmHandler = async (submit = true) => {
-		if (submit && !canBranch) return;
 		if (!editedContent && (editedFiles ?? []).length === 0) {
 			toast.error($i18n.t('Please enter a message or attach a file.'));
 			return;
@@ -171,10 +170,8 @@
 	id="message-{message.id}"
 	style="scroll-margin-top: 3rem;"
 >
-	{#if !compactPreview && (!($settings?.chatBubble ?? true) || !isOwn) && !(message?.meta?.internal === true && message?.meta?.type === 'subagent') && !(message?.meta?.internal === true && message?.meta?.type === 'timer')}
-		<div
-			class="shrink-0 me-2 {($settings?.chatBubble ?? true) ? 'mt-6' : 'hidden @lg:flex mt-0.5'}"
-		>
+	{#if !compactPreview && (!chatBubble || !isOwn) && !isInternalMessage(message)}
+		<div class="shrink-0 me-2 {chatBubble ? 'mt-6' : 'hidden @lg:flex mt-0.5'}">
 			<!-- LICENSE covers this Open WebUI fallback logo.
 			Do not alter, remove, obscure, or replace it except as LICENSE permits:
 			https://docs.openwebui.com/license. -->
@@ -188,20 +185,10 @@
 			</ProfilePreview>
 		</div>
 	{/if}
-	<div
-		class="flex-auto w-0 max-w-full {(message?.meta?.internal === true &&
-			message?.meta?.type === 'subagent') ||
-		(message?.meta?.internal === true && message?.meta?.type === 'timer')
-			? ''
-			: 'pl-1'}"
-	>
-		{#if !compactPreview && (!($settings?.chatBubble ?? true) || !isOwn) && !(message?.meta?.internal === true && message?.meta?.type === 'subagent') && !(message?.meta?.internal === true && message?.meta?.type === 'timer')}
-			<div
-				class={($settings?.chatBubble ?? true)
-					? 'mb-1 ps-2 text-xs text-gray-400 dark:text-gray-500'
-					: ''}
-			>
-				{#if $settings?.chatBubble ?? true}
+	<div class="flex-auto w-0 max-w-full {isInternalMessage(message) ? '' : 'pl-1'}">
+		{#if !compactPreview && (!chatBubble || !isOwn) && !isInternalMessage(message)}
+			<div class={chatBubble ? 'mb-1 ps-2 text-xs text-base-400 dark:text-base-500' : ''}>
+				{#if chatBubble}
 					{authorName}
 				{:else}
 					<Name>{isOwn && !$settings.showUsername ? $i18n.t('You') : authorName}</Name>
@@ -209,12 +196,8 @@
 			</div>
 		{/if}
 
-		{#if message.contextSummary || $contextCompactions?.[messageId]}
-			<ContextCompactionLabel
-				summary={message.contextSummary}
-				status={$contextCompactions?.[messageId]}
-				{compactPreview}
-			/>
+		{#if message.contextSummary}
+			<ContextCompactionLabel summary={message.contextSummary} {compactPreview} />
 		{/if}
 
 		<div class="chat-{message.role} w-full min-w-full">
@@ -229,12 +212,11 @@
 								file.url?.startsWith('data') || file.url?.startsWith('http')
 									? file.url
 									: `${WEBUI_API_BASE_URL}/files/${file.url}${file?.content_type ? '/content' : ''}`}
-							<div
-								class={($settings?.chatBubble ?? true) ? (isOwn ? 'self-end' : 'self-start') : ''}
-							>
+							<div class={chatBubble ? (isOwn ? 'self-end' : 'self-start') : ''}>
 								{#if file.type === 'image' || isRasterImageContentType(file?.content_type)}
 									<Image src={fileUrl} imageClassName=" max-h-96 rounded-lg" />
 								{:else}
+									<!-- A saved view of a chat has no tabs to open a file in -->
 									<FileItem
 										item={file}
 										url={file.url}
@@ -242,6 +224,7 @@
 										type={file.type}
 										size={file?.size}
 										small={true}
+										chatId={readOnly || compactPreview ? null : chatId}
 									/>
 								{/if}
 							</div>
@@ -252,7 +235,7 @@
 
 			{#if edit === true}
 				<div
-					class=" w-full bg-gray-50 dark:bg-gray-800 rounded-3xl px-4 py-3 mb-2 {($settings?.highContrastMode ??
+					class=" w-full bg-base-50 dark:bg-base-800 rounded-3xl px-4 py-3 mb-2 {($settings?.highContrastMode ??
 					false)
 						? 'focus-within:outline focus-within:outline-2 focus-within:-outline-offset-2 focus-within:outline-blue-500'
 						: ''}"
@@ -276,7 +259,7 @@
 										<div class=" absolute -top-1 -right-1">
 											<button
 												aria-label={$i18n.t('Remove file')}
-												class=" bg-white text-black border border-white rounded-full {($settings?.highContrastMode ??
+												class=" bg-base-0 text-base-1000 border border-base-0 rounded-full {($settings?.highContrastMode ??
 												false)
 													? ''
 													: 'hover-reveal transition'}"
@@ -343,14 +326,14 @@
 							}}
 							on:keydown={(e) => {
 								if (e.key === 'Escape') {
-									document.getElementById('close-edit-message-button')?.click();
+									cancelEditMessage();
 								}
 
 								const isCmdOrCtrlPressed = e.metaKey || e.ctrlKey;
 								const isEnterPressed = e.key === 'Enter';
 
 								if (isCmdOrCtrlPressed && isEnterPressed) {
-									document.getElementById('confirm-edit-message-button')?.click();
+									editMessageConfirmHandler();
 								}
 							}}
 						/>
@@ -361,7 +344,7 @@
 							{#if isOwn && !readOnly}
 								<button
 									id="save-edit-message-button"
-									class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-100 px-2.5 text-xs font-normal text-gray-800 transition hover:bg-gray-100/70 disabled:opacity-60 dark:bg-gray-850 dark:text-white dark:hover:bg-gray-850/60"
+									class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-base-100 px-2.5 text-xs font-normal text-base-800 transition hover:bg-base-100/70 disabled:opacity-60 dark:bg-base-850 dark:text-base-0 dark:hover:bg-base-850/60"
 									on:click={() => {
 										editMessageConfirmHandler(false);
 									}}
@@ -374,7 +357,7 @@
 						<div class="flex space-x-1.5">
 							<button
 								id="close-edit-message-button"
-								class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-normal text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60 dark:text-gray-400 dark:hover:bg-gray-850 dark:hover:text-white"
+								class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-normal text-base-600 transition hover:bg-base-100 hover:text-base-900 disabled:opacity-60 dark:text-base-400 dark:hover:bg-base-850 dark:hover:text-base-0"
 								on:click={() => {
 									cancelEditMessage();
 								}}
@@ -382,66 +365,32 @@
 								{$i18n.t('Cancel')}
 							</button>
 
-							{#if canBranch}
-								<button
-									id="confirm-edit-message-button"
-									class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
-									on:click={() => {
-										editMessageConfirmHandler();
-									}}
-								>
-									{$i18n.t('Send')}
-								</button>
-							{/if}
+							<button
+								id="confirm-edit-message-button"
+								class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-base-900 px-2.5 text-xs font-normal text-base-0 transition hover:bg-base-1000 disabled:opacity-60 dark:bg-base-100 dark:text-base-900 dark:hover:bg-base-0"
+								on:click={() => {
+									editMessageConfirmHandler();
+								}}
+							>
+								{$i18n.t('Send')}
+							</button>
 						</div>
 					</div>
 				</div>
-			{:else if message?.meta?.internal === true && message?.meta?.type === 'timer'}
-				<div class="w-full min-w-0">
-					<button
-						type="button"
-						class="flex w-full min-w-0 items-center gap-2 text-left text-gray-500 transition-colors hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
-						aria-expanded={timerExpanded}
-						on:click={() => {
-							timerExpanded = !timerExpanded;
-						}}
-					>
-						<span class="shrink-0 text-[0.75rem] font-medium">{$i18n.t('Timer')}</span>
-						<span class="min-w-0 flex-1 truncate text-[0.75rem]">{message.content}</span>
-						<svg
-							xmlns="http://www.w3.org/2000/svg"
-							fill="none"
-							viewBox="0 0 24 24"
-							stroke-width="2"
-							stroke="currentColor"
-							class="size-3 shrink-0 text-gray-400 transition-transform duration-150 dark:text-gray-600 {timerExpanded
-								? 'rotate-180'
-								: ''}"
-						>
-							<path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-						</svg>
-					</button>
-					{#if timerExpanded}
-						<div
-							class="mt-2 ml-3 whitespace-pre-wrap break-words border-l border-gray-100 pl-3 text-[0.78125rem] leading-relaxed text-gray-600 dark:border-white/10 dark:text-gray-400"
-							dir={$settings?.chatDirection ?? 'auto'}
-						>
-							{message.content}
-						</div>
-					{/if}
-				</div>
-			{:else if message?.meta?.internal === true && message?.meta?.type === 'subagent'}
-				<SubagentResultRow content={message.content} result={message.meta} />
+			{:else if isInternalMessage(message) && message.meta.type === 'timer'}
+				<TimerRow content={message.content} />
+			{:else if isInternalMessage(message) && message.meta.type === 'message'}
+				<ChatMessageRow content={message.content} />
+			{:else if isInternalMessage(message)}
+				<SubagentResultRow content={message.content} />
 			{:else if message.content !== ''}
 				<div class="w-full">
 					<div
-						class="flex {($settings?.chatBubble ?? true)
-							? `${isOwn ? 'justify-end' : 'justify-start'} pb-1`
-							: 'w-full'}"
+						class="flex {chatBubble ? `${isOwn ? 'justify-end' : 'justify-start'} pb-1` : 'w-full'}"
 					>
 						<div
-							class="rounded-3xl {($settings?.chatBubble ?? true)
-								? `max-w-[90%] px-4 py-1.5  bg-gray-50 dark:bg-gray-850 ${
+							class="rounded-3xl {chatBubble
+								? `max-w-[90%] px-4 py-1.5  bg-base-50 dark:bg-base-850 ${
 										message.files ? (isOwn ? 'rounded-se-lg' : 'rounded-ss-lg') : ''
 									}`
 								: ' w-full'}"
@@ -490,42 +439,39 @@
 				</div>
 			{/if}
 
-			{#if edit !== true && !(message?.meta?.internal === true && message?.meta?.type === 'subagent') && !(message?.meta?.internal === true && message?.meta?.type === 'timer')}
+			{#if edit !== true && !isInternalMessage(message)}
 				<div
-					class="flex items-center {($settings?.chatBubble ?? true)
+					class="buttons flex items-center {chatBubble
 						? isOwn
 							? 'justify-end'
 							: 'justify-start'
 						: 'items-center'}  {($settings?.highContrastMode ?? false)
-						? 'text-gray-600 dark:text-gray-500'
-						: 'text-gray-600/80 dark:text-gray-500/70'}"
+						? 'text-base-600 dark:text-base-500'
+						: 'text-base-600/80 dark:text-base-500/70'}"
 				>
 					{#if message.timestamp}
 						<Tooltip
-							className="flex self-center {($settings?.chatBubble ?? true) && isOwn
-								? 'mr-1'
-								: 'order-last'}"
+							className="flex self-center {chatBubble && isOwn ? 'mr-1' : 'order-last'}"
 							content={formatMessageTimestampFull(message.timestamp * 1000, $i18n.language)}
 							placement="bottom"
 						>
 							<time
 								datetime={new Date(message.timestamp * 1000).toISOString()}
-								class="{compactPreview ? '' : 'hover-reveal'} {($settings?.chatBubble ?? true) &&
-								isOwn
+								class="{compactPreview ? '' : 'hover-reveal'} {chatBubble && isOwn
 									? 'mr-1'
-									: 'ml-1 shrink-0 whitespace-nowrap'} text-[0.6875rem] tabular-nums text-gray-400 dark:text-gray-600 select-none"
+									: 'ml-1 shrink-0 whitespace-nowrap'} text-[0.6875rem] tabular-nums text-base-400 dark:text-base-600 select-none"
 							>
 								{formatMessageTimestamp(message.timestamp * 1000, $i18n.language)}
 							</time>
 						</Tooltip>
 					{/if}
 
-					{#if !compactPreview && (!($settings?.chatBubble ?? true) || !isOwn)}
+					{#if !compactPreview && (!chatBubble || !isOwn)}
 						{#if siblings.length > 1}
 							<div class="flex self-center" dir="ltr">
 								<button
 									aria-label={$i18n.t('Previous message')}
-									class="self-center inline-flex size-7 shrink-0 items-center justify-center p-1.5 hover:bg-black/5 dark:hover:bg-white/5 dark:hover:text-gray-400 hover:text-gray-600 rounded-md transition previous-message-button"
+									class="self-center inline-flex size-7 shrink-0 items-center justify-center p-1.5 hover:bg-base-1000/5 dark:hover:bg-base-0/5 dark:hover:text-base-400 hover:text-base-600 rounded-md transition previous-message-button"
 									on:click={() => {
 										showPreviousMessage(message);
 									}}
@@ -535,7 +481,7 @@
 
 								{#if messageIndexEdit}
 									<div
-										class="text-sm flex justify-center font-normal self-center dark:text-gray-500 min-w-fit"
+										class="text-sm flex justify-center font-normal self-center dark:text-base-500 min-w-fit"
 									>
 										<input
 											aria-label={$i18n.t('Message number')}
@@ -557,13 +503,13 @@
 													messageIndexEdit = false;
 												}
 											}}
-											class="bg-transparent font-normal self-center dark:text-gray-500 min-w-fit outline-hidden"
+											class="bg-transparent font-normal self-center dark:text-base-500 min-w-fit outline-hidden"
 										/>/{siblings.length}
 									</div>
 								{:else}
 									<!-- svelte-ignore a11y-no-static-element-interactions -->
 									<div
-										class="text-sm tracking-widest font-normal self-center dark:text-gray-500 min-w-fit"
+										class="text-sm tracking-widest font-normal self-center dark:text-base-500 min-w-fit"
 										on:dblclick={async () => {
 											messageIndexEdit = true;
 
@@ -581,7 +527,7 @@
 
 								<button
 									aria-label={$i18n.t('Next message')}
-									class="self-center inline-flex size-7 shrink-0 items-center justify-center p-1.5 hover:bg-black/5 dark:hover:bg-white/5 dark:hover:text-gray-400 hover:text-gray-600 rounded-md transition next-message-button"
+									class="self-center inline-flex size-7 shrink-0 items-center justify-center p-1.5 hover:bg-base-1000/5 dark:hover:bg-base-0/5 dark:hover:text-base-400 hover:text-base-600 rounded-md transition next-message-button"
 									on:click={() => {
 										showNextMessage(message);
 									}}
@@ -591,12 +537,12 @@
 							</div>
 						{/if}
 					{/if}
-					{#if !compactPreview && (!readOnly || shareMode === 'continue') && ($_user?.role === 'admin' || ($_user?.permissions?.chat?.edit ?? true))}
+					{#if !compactPreview && (!readOnly || writeAccess) && ($_user?.role === 'admin' || ($_user?.permissions?.chat?.edit ?? true))}
 						<Tooltip content={$i18n.t('Edit')} placement="bottom">
 							<button
 								class="{($settings?.highContrastMode ?? false)
 									? ''
-									: 'hover-reveal'} inline-flex size-7 shrink-0 items-center justify-center p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-gray-400 hover:text-gray-600 transition edit-user-message-button"
+									: 'hover-reveal'} inline-flex size-7 shrink-0 items-center justify-center p-1.5 hover:bg-base-1000/5 dark:hover:bg-base-0/5 rounded-lg dark:hover:text-base-400 hover:text-base-600 transition edit-user-message-button"
 								aria-label={$i18n.t('Edit')}
 								bind:this={editButtonElement}
 								on:click={() => {
@@ -613,7 +559,7 @@
 							<button
 								class="{($settings?.highContrastMode ?? false)
 									? ''
-									: 'hover-reveal'} inline-flex size-7 shrink-0 items-center justify-center p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-gray-400 hover:text-gray-600 transition"
+									: 'hover-reveal'} inline-flex size-7 shrink-0 items-center justify-center p-1.5 hover:bg-base-1000/5 dark:hover:bg-base-0/5 rounded-lg dark:hover:text-base-400 hover:text-base-600 transition"
 								aria-label={$i18n.t('Copy')}
 								on:click={() => {
 									copyToClipboard(message.content);
@@ -631,7 +577,7 @@
 									aria-label={$i18n.t('Delete')}
 									class="{($settings?.highContrastMode ?? false)
 										? ''
-										: 'hover-reveal'} inline-flex size-7 shrink-0 items-center justify-center p-1.5 rounded-lg dark:hover:text-gray-400 hover:text-gray-600 transition"
+										: 'hover-reveal'} inline-flex size-7 shrink-0 items-center justify-center p-1.5 rounded-lg dark:hover:text-base-400 hover:text-base-600 transition"
 									on:click={(e) => {
 										if (e.shiftKey) {
 											deleteMessageHandler();
@@ -646,12 +592,12 @@
 						{/if}
 					{/if}
 
-					{#if !compactPreview && ($settings?.chatBubble ?? true) && isOwn}
+					{#if !compactPreview && chatBubble && isOwn}
 						{#if siblings.length > 1}
 							<div class="flex self-center" dir="ltr">
 								<button
 									aria-label={$i18n.t('Previous message')}
-									class="self-center inline-flex size-7 shrink-0 items-center justify-center p-1.5 hover:bg-black/5 dark:hover:bg-white/5 dark:hover:text-gray-400 hover:text-gray-600 rounded-md transition previous-message-button"
+									class="self-center inline-flex size-7 shrink-0 items-center justify-center p-1.5 hover:bg-base-1000/5 dark:hover:bg-base-0/5 dark:hover:text-base-400 hover:text-base-600 rounded-md transition previous-message-button"
 									on:click={() => {
 										showPreviousMessage(message);
 									}}
@@ -661,7 +607,7 @@
 
 								{#if messageIndexEdit}
 									<div
-										class="text-sm flex justify-center font-normal self-center dark:text-gray-500 min-w-fit"
+										class="text-sm flex justify-center font-normal self-center dark:text-base-500 min-w-fit"
 									>
 										<input
 											aria-label={$i18n.t('Message number')}
@@ -683,13 +629,13 @@
 													messageIndexEdit = false;
 												}
 											}}
-											class="bg-transparent font-normal self-center dark:text-gray-500 min-w-fit outline-hidden"
+											class="bg-transparent font-normal self-center dark:text-base-500 min-w-fit outline-hidden"
 										/>/{siblings.length}
 									</div>
 								{:else}
 									<!-- svelte-ignore a11y-no-static-element-interactions -->
 									<div
-										class="text-sm tracking-widest font-normal self-center dark:text-gray-500 min-w-fit"
+										class="text-sm tracking-widest font-normal self-center dark:text-base-500 min-w-fit"
 										on:dblclick={async () => {
 											messageIndexEdit = true;
 
@@ -707,7 +653,7 @@
 
 								<button
 									aria-label={$i18n.t('Next message')}
-									class="self-center inline-flex size-7 shrink-0 items-center justify-center p-1.5 hover:bg-black/5 dark:hover:bg-white/5 dark:hover:text-gray-400 hover:text-gray-600 rounded-md transition next-message-button"
+									class="self-center inline-flex size-7 shrink-0 items-center justify-center p-1.5 hover:bg-base-1000/5 dark:hover:bg-base-0/5 dark:hover:text-base-400 hover:text-base-600 rounded-md transition next-message-button"
 									on:click={() => {
 										showNextMessage(message);
 									}}
