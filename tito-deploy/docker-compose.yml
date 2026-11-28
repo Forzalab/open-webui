@@ -68,6 +68,8 @@ services:
       TITO_SELFCHECK_USER_ID: ${TITO_SELFCHECK_USER_ID:-2ce35e4f-e74d-4590-b55f-52e386fcafde}
       TITO_SOFT_CAP_USD: "30"
       TITO_HARD_CAP_USD: "35"
+      MIMI_SOFT_CAP_USD: "10"
+      MIMI_HARD_CAP_USD: "20"
       TITO_PLACES_API_KEY: ${TITO_PLACES_API_KEY:-}
       # Pipe 0.11.9+ reads this when the TITO_DECIDE_KEY valve is empty (OpenRouter, decide step).
       TITO_DECIDE_KEY: ${TITO_DECIDE_KEY:-}
